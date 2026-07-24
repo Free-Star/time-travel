@@ -227,6 +227,19 @@ nav {
   font-size: 18px;
 }
 
+.primary-button.compact {
+  margin-top: 0;
+}
+
+.secondary-button {
+  padding: 12px 18px;
+  border: 1px solid #c6c3b8;
+  border-radius: 8px;
+  color: #4f554c;
+  background: #f5f2eb;
+  cursor: pointer;
+}
+
 .error-message {
   margin-top: 18px !important;
   color: #a14336 !important;
@@ -341,6 +354,115 @@ nav {
   border-top: 1px solid #e4e1d8;
   color: #85847c;
   font-size: 12px;
+}
+
+.scan-card {
+  padding: 28px 32px;
+  border: 1px solid #dedbd2;
+  border-radius: 14px;
+  background: rgba(252, 250, 245, 0.84);
+}
+
+.scan-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.scan-heading h3 {
+  margin: 7px 0 4px;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: 22px;
+}
+
+.scan-heading p {
+  margin: 0;
+  color: #8b8a81;
+  font-size: 12px;
+}
+
+.index-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  margin-top: 24px;
+  overflow: hidden;
+  border: 1px solid #e2dfd6;
+  border-radius: 10px;
+  background: #e2dfd6;
+}
+
+.index-stats div {
+  padding: 15px 18px;
+  background: #f8f6f0;
+}
+
+.index-stats span,
+.index-stats strong {
+  display: block;
+}
+
+.index-stats span {
+  color: #929087;
+  font-size: 11px;
+}
+
+.index-stats strong {
+  margin-top: 3px;
+  color: #3e443b;
+  font-size: 19px;
+}
+
+.scan-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 13px 15px;
+  border-radius: 8px;
+  color: #53604e;
+  background: #e9eee5;
+}
+
+.scan-progress.cancelled {
+  color: #786c53;
+  background: #f0eadf;
+}
+
+.scan-progress div,
+.scan-progress strong,
+.scan-progress small {
+  display: block;
+}
+
+.scan-progress strong {
+  font-size: 12px;
+}
+
+.scan-progress small {
+  margin-top: 2px;
+  color: inherit;
+  font-size: 11px;
+  opacity: 0.72;
+}
+
+.scan-pulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #76966f;
+  box-shadow: 0 0 0 5px rgba(118, 150, 111, 0.13);
+}
+
+.scan-progress.scanning .scan-pulse {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    box-shadow: 0 0 0 9px rgba(118, 150, 111, 0.04);
+  }
 }
 
 @media (max-width: 1050px) {

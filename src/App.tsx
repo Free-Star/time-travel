@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import "./App.css";
@@ -12,17 +13,60 @@ type LibrarySummary = {
   writePolicy: string;
 };
 
+type IndexSummary = {
+  total: number;
+  photos: number;
+  videos: number;
+  withLocation: number;
+  lastScanAt: string | null;
+};
+
+type ScanProgress = {
+  status: "scanning" | "completed" | "cancelled";
+  discovered: number;
+  inserted: number;
+  updated: number;
+  unchanged: number;
+  errors: number;
+  currentPath: string;
+};
+
+type ScanReport = ScanProgress & {
+  removed: number;
+  summary: IndexSummary;
+};
+
 function App() {
   const [library, setLibrary] = useState<LibrarySummary | null>(null);
+  const [index, setIndex] = useState<IndexSummary | null>(null);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
     invoke<LibrarySummary | null>("current_library")
-      .then(setLibrary)
+      .then((summary) => {
+        setLibrary(summary);
+        if (summary) return loadIndex();
+      })
       .catch((reason) => setError(String(reason)))
       .finally(() => setBusy(false));
   }, []);
+
+  useEffect(() => {
+    const unlisten = listen<ScanProgress>("scan-progress", (event) => {
+      setScanProgress(event.payload);
+    });
+    return () => {
+      void unlisten.then((dispose) => dispose());
+    };
+  }, []);
+
+  async function loadIndex() {
+    const summary = await invoke<IndexSummary | null>("current_index");
+    setIndex(summary);
+  }
 
   async function chooseLibrary() {
     setError("");
@@ -40,12 +84,42 @@ function App() {
         root: selected,
       });
       setLibrary(summary);
+      await loadIndex();
     } catch (reason) {
       setError(String(reason));
     } finally {
       setBusy(false);
     }
   }
+
+  async function startScan() {
+    setError("");
+    setScanning(true);
+    setScanProgress({
+      status: "scanning",
+      discovered: 0,
+      inserted: 0,
+      updated: 0,
+      unchanged: 0,
+      errors: 0,
+      currentPath: "",
+    });
+    try {
+      const report = await invoke<ScanReport>("scan_library");
+      setIndex(report.summary);
+      setScanProgress(report);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  async function cancelScan() {
+    await invoke<boolean>("cancel_scan");
+  }
+
+  const number = new Intl.NumberFormat("zh-CN");
 
   return (
     <div className="app-shell">
@@ -157,8 +231,82 @@ function App() {
                 </div>
               </dl>
               <p className="next-step">
-                完整媒体扫描将在阶段 2 启用；当前只检查一级目录和安全边界。
+                扫描只读取路径、文件属性与照片 EXIF；数据库位于系统应用数据目录。
               </p>
+            </section>
+          )}
+
+          {library && (
+            <section className="scan-card">
+              <div className="scan-heading">
+                <div>
+                  <span className="section-label">本地媒体索引</span>
+                  <h3>{index?.total ? `${number.format(index.total)} 个媒体` : "尚未建立索引"}</h3>
+                  <p>
+                    {index?.lastScanAt
+                      ? `上次完成：${new Date(index.lastScanAt).toLocaleString("zh-CN")}`
+                      : "首次扫描会读取媒体元数据，但不会生成缩略图。"}
+                  </p>
+                </div>
+                <div className="scan-actions">
+                  {scanning ? (
+                    <button className="secondary-button" type="button" onClick={cancelScan}>
+                      停止扫描
+                    </button>
+                  ) : (
+                    <button className="primary-button compact" type="button" onClick={startScan}>
+                      {index?.total ? "增量扫描" : "开始只读扫描"}
+                      <span>→</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {(index?.total || scanProgress) && (
+                <div className="index-stats">
+                  <div>
+                    <span>照片</span>
+                    <strong>{number.format(index?.photos ?? scanProgress?.inserted ?? 0)}</strong>
+                  </div>
+                  <div>
+                    <span>视频</span>
+                    <strong>{number.format(index?.videos ?? 0)}</strong>
+                  </div>
+                  <div>
+                    <span>带定位</span>
+                    <strong>{number.format(index?.withLocation ?? 0)}</strong>
+                  </div>
+                  <div>
+                    <span>{scanning ? "已发现" : "错误"}</span>
+                    <strong>
+                      {number.format(
+                        scanning ? (scanProgress?.discovered ?? 0) : (scanProgress?.errors ?? 0),
+                      )}
+                    </strong>
+                  </div>
+                </div>
+              )}
+
+              {scanProgress && (
+                <div className={`scan-progress ${scanProgress.status}`}>
+                  <span className="scan-pulse" />
+                  <div>
+                    <strong>
+                      {scanProgress.status === "scanning"
+                        ? `正在建立索引 · ${number.format(scanProgress.discovered)}`
+                        : scanProgress.status === "completed"
+                          ? "扫描完成"
+                          : "扫描已停止"}
+                    </strong>
+                    <small>
+                      新增 {number.format(scanProgress.inserted)} · 更新{" "}
+                      {number.format(scanProgress.updated)} · 未变化{" "}
+                      {number.format(scanProgress.unchanged)} · 错误{" "}
+                      {number.format(scanProgress.errors)}
+                    </small>
+                  </div>
+                </div>
+              )}
             </section>
           )}
         </section>

@@ -1,4 +1,7 @@
 function Enter-TimeAlbumBuildEnvironment {
+    $projectDrive = [System.IO.Path]::GetPathRoot($PSScriptRoot)
+    $env:CARGO_TARGET_DIR = Join-Path $projectDrive 'TimeAlbumBuild\time-album'
+
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (-not (Test-Path -LiteralPath $vswhere)) {
         throw 'Visual Studio Installer was not found.'

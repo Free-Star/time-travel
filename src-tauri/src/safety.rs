@@ -11,6 +11,14 @@ pub fn canonical_existing(path: &Path) -> Result<PathBuf, String> {
     fs::canonicalize(path).map_err(|error| format!("无法访问路径 {}：{error}", path.display()))
 }
 
+pub fn workspace_dir() -> Result<PathBuf, String> {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace = manifest
+        .parent()
+        .ok_or_else(|| "无法确定开发工具目录".to_string())?;
+    canonical_existing(workspace)
+}
+
 /// Return true when `candidate` is `root` itself or one of its descendants.
 ///
 /// Both paths must already be absolute/canonical at runtime.
@@ -98,6 +106,14 @@ pub fn write_bytes_outside_library(
         .map_err(|error| format!("无法写入应用配置：{error}"))?;
     file.write_all(bytes)
         .map_err(|error| format!("无法完成应用配置写入：{error}"))
+}
+
+pub fn create_directory_outside_library(
+    directory: &Path,
+    library_root: &Path,
+) -> Result<(), String> {
+    ensure_write_outside_library(directory, library_root)?;
+    fs::create_dir_all(directory).map_err(|error| format!("无法创建应用数据目录：{error}"))
 }
 
 #[cfg(test)]

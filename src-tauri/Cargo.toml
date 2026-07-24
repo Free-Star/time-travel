@@ -18,7 +18,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+kamadak-exif = "0.6"
+regex = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+walkdir = "2"
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+debug = 0

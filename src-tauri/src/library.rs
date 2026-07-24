@@ -29,7 +29,7 @@ impl AppState {
         Ok(())
     }
 
-    fn root(&self) -> Result<Option<PathBuf>, String> {
+    pub fn root(&self) -> Result<Option<PathBuf>, String> {
         self.library_root
             .lock()
             .map(|guard| guard.clone())
@@ -88,7 +88,7 @@ fn validate_library_root(root: &Path) -> Result<PathBuf, String> {
         return Err("所选路径不是文件夹".to_string());
     }
 
-    let workspace = workspace_dir()?;
+    let workspace = safety::workspace_dir()?;
     if safety::is_same_or_descendant(&canonical_root, &workspace) {
         return Err("不能把开发工具目录本身选作相册".to_string());
     }
@@ -98,7 +98,7 @@ fn validate_library_root(root: &Path) -> Result<PathBuf, String> {
 }
 
 fn summarize(root: &Path) -> Result<LibrarySummary, String> {
-    let workspace = workspace_dir()?;
+    let workspace = safety::workspace_dir()?;
     let mut top_level_folders = 0;
     let mut top_level_media = 0;
 
@@ -145,14 +145,6 @@ fn is_supported_media(path: &Path) -> bool {
                 .any(|supported| extension.eq_ignore_ascii_case(supported))
         })
         .unwrap_or(false)
-}
-
-fn workspace_dir() -> Result<PathBuf, String> {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace = manifest
-        .parent()
-        .ok_or_else(|| "无法确定开发工具目录".to_string())?;
-    safety::canonical_existing(workspace)
 }
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
