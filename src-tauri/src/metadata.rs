@@ -161,11 +161,12 @@ fn filename_datetime(stem: Option<&OsStr>) -> Option<(String, &'static str)> {
     static FULL: OnceLock<Regex> = OnceLock::new();
     static DATE: OnceLock<Regex> = OnceLock::new();
     let full = FULL.get_or_init(|| {
-        Regex::new(r"(?i)(20\d{2})[-_]?(\d{2})[-_]?(\d{2})[-_T]?(\d{2})[-_:]?(\d{2})[-_:]?(\d{2})")
+        Regex::new(r"(?i)(?:^|[^0-9])(20\d{2})[-_]?(\d{2})[-_]?(\d{2})[-_T]?(\d{2})[-_:]?(\d{2})[-_:]?(\d{2})(?:[^0-9]|$)")
             .expect("valid full date regex")
     });
     let date = DATE.get_or_init(|| {
-        Regex::new(r"(?i)(20\d{2})[-_]?(\d{2})[-_]?(\d{2})").expect("valid date regex")
+        Regex::new(r"(?i)(?:^|[^0-9])(20\d{2})[-_]?(\d{2})[-_]?(\d{2})(?:[^0-9]|$)")
+            .expect("valid date regex")
     });
 
     if let Some(captures) = full.captures(&stem) {
@@ -239,6 +240,11 @@ mod tests {
         let parsed = filename_datetime(Some(OsStr::new("Screenshot_2026-01-14-16-30-26-657_app")))
             .expect("screenshot filename parses");
         assert_eq!(parsed.0, "2026-01-14T16:30:26");
+    }
+
+    #[test]
+    fn ignores_date_like_substrings_inside_long_identifiers() {
+        assert!(filename_datetime(Some(OsStr::new("weread_image_22209603086420"))).is_none());
     }
 
     #[test]

@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import "./App.css";
+import TimelineView from "./TimelineView";
 
 type LibrarySummary = {
   root: string;
@@ -19,6 +20,7 @@ type IndexSummary = {
   videos: number;
   withLocation: number;
   lastScanAt: string | null;
+  needsMetadataRefresh: boolean;
 };
 
 type ScanProgress = {
@@ -70,6 +72,7 @@ type ThumbnailReport = {
 };
 
 function App() {
+  const [view, setView] = useState<"home" | "timeline">("home");
   const [library, setLibrary] = useState<LibrarySummary | null>(null);
   const [index, setIndex] = useState<IndexSummary | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
@@ -243,10 +246,25 @@ function App() {
         </div>
 
         <nav aria-label="主导航">
-          <button className="nav-item active" type="button">
+          <button
+            className={`nav-item ${view === "home" ? "active" : ""}`}
+            type="button"
+            onClick={() => {
+              setView("home");
+              if (library) void loadThumbnailData();
+            }}
+          >
             <span>⌁</span>开始
           </button>
-          <button className="nav-item" type="button" disabled>
+          <button
+            className={`nav-item ${view === "timeline" ? "active" : ""}`}
+            type="button"
+            disabled={!index?.total || index.needsMetadataRefresh}
+            onClick={() => {
+              setError("");
+              setView("timeline");
+            }}
+          >
             <span>◷</span>时间线
           </button>
           <button className="nav-item" type="button" disabled>
@@ -263,13 +281,27 @@ function App() {
       <main>
         <header className="topbar">
           <div>
-            <span className="eyebrow">阶段 3 · 本地预览缓存</span>
-            <h1>{library ? "相册已连接" : "连接你的相册库"}</h1>
+            <span className="eyebrow">阶段 4 · 时间线与查看器</span>
+            <h1>
+              {view === "timeline"
+                ? "沿着时间，重看记忆"
+                : library
+                  ? "相册已连接"
+                  : "连接你的相册库"}
+            </h1>
           </div>
           <div className="readonly-pill">只读模式</div>
         </header>
 
-        <section className="content">
+        {view === "timeline" && error && (
+          <button className="global-error" type="button" onClick={() => setError("")}>
+            {error}
+            <span>×</span>
+          </button>
+        )}
+
+        {view === "home" ? (
+          <section className="content">
           <div className="hero-card">
             <div className="hero-copy">
               <span className="section-label">READ-ONLY BY DESIGN</span>
@@ -353,9 +385,11 @@ function App() {
                   <span className="section-label">本地媒体索引</span>
                   <h3>{index?.total ? `${number.format(index.total)} 个媒体` : "尚未建立索引"}</h3>
                   <p>
-                    {index?.lastScanAt
-                      ? `上次完成：${new Date(index.lastScanAt).toLocaleString("zh-CN")}`
-                      : "首次扫描会读取媒体元数据，但不会生成缩略图。"}
+                    {index?.needsMetadataRefresh
+                      ? "日期识别规则已更新，请执行一次只读索引刷新后再进入时间线。"
+                      : index?.lastScanAt
+                        ? `上次完成：${new Date(index.lastScanAt).toLocaleString("zh-CN")}`
+                        : "首次扫描会读取媒体元数据，但不会生成缩略图。"}
                   </p>
                 </div>
                 <div className="scan-actions">
@@ -365,7 +399,11 @@ function App() {
                     </button>
                   ) : (
                     <button className="primary-button compact" type="button" onClick={startScan}>
-                      {index?.total ? "增量扫描" : "开始只读扫描"}
+                      {index?.needsMetadataRefresh
+                        ? "更新元数据索引"
+                        : index?.total
+                          ? "增量扫描"
+                          : "开始只读扫描"}
                       <span>→</span>
                     </button>
                   )}
@@ -498,7 +536,10 @@ function App() {
               )}
             </section>
           ) : null}
-        </section>
+          </section>
+        ) : index ? (
+          <TimelineView totalMedia={index.total} onError={setError} />
+        ) : null}
       </main>
     </div>
   );

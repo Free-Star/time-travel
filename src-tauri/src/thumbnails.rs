@@ -92,7 +92,38 @@ pub fn generate(
     let root = safety::canonical_existing(library_root)?;
     let cache = cache_dir(app, &root)?;
     let database_path = database::database_path(app)?;
-    generate_core(Some(app), &root, &cache, &database_path, cancel, limit)
+    generate_core(
+        Some(app),
+        &root,
+        &cache,
+        &database_path,
+        cancel,
+        limit,
+        None,
+    )
+}
+
+pub fn generate_selected(
+    app: &AppHandle,
+    library_root: &Path,
+    cancel: &AtomicBool,
+    media_ids: &[i64],
+) -> Result<ThumbnailReport, String> {
+    if media_ids.is_empty() || media_ids.len() > 100 {
+        return Err("可见预览批次必须包含 1 到 100 个媒体".to_string());
+    }
+    let root = safety::canonical_existing(library_root)?;
+    let cache = cache_dir(app, &root)?;
+    let database_path = database::database_path(app)?;
+    generate_core(
+        Some(app),
+        &root,
+        &cache,
+        &database_path,
+        cancel,
+        media_ids.len(),
+        Some(media_ids),
+    )
 }
 
 fn generate_core(
@@ -102,11 +133,16 @@ fn generate_core(
     database_path: &Path,
     cancel: &AtomicBool,
     limit: usize,
+    media_ids: Option<&[i64]>,
 ) -> Result<ThumbnailReport, String> {
     let root = safety::canonical_existing(library_root)?;
     safety::create_directory_outside_library(&cache, &root)?;
     let connection = database::open_at(database_path, &root)?;
-    let candidates = database::thumbnail_candidates(&connection, &root, limit.clamp(1, 1000))?;
+    let candidates = if let Some(media_ids) = media_ids {
+        database::thumbnail_candidates_by_ids(&connection, &root, media_ids)?
+    } else {
+        database::thumbnail_candidates(&connection, &root, limit.clamp(1, 1000))?
+    };
     let ffmpeg = find_ffmpeg();
     let mut progress = ThumbnailProgress {
         status: "generating".to_string(),
@@ -508,6 +544,7 @@ mod tests {
             Path::new(&database),
             &AtomicBool::new(false),
             100,
+            None,
         )
         .expect("real thumbnail batch succeeds");
         assert_eq!(report.status, "completed");

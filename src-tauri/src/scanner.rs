@@ -177,7 +177,7 @@ fn run_core(
             let path_string = canonical_path.to_string_lossy().to_string();
             let fingerprint = database::existing_fingerprint(&transaction, &path_string)?;
 
-            if fingerprint == Some((size_bytes, modified_ns)) {
+            if fingerprint == Some((size_bytes, modified_ns, database::METADATA_VERSION)) {
                 database::mark_seen(&transaction, &path_string, scan_id)?;
                 progress.unchanged += 1;
             } else {
@@ -388,18 +388,15 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires TIME_ALBUM_REAL_LIBRARY and TIME_ALBUM_REAL_DB"]
+    #[ignore = "requires TIME_ALBUM_REAL_DB"]
     fn scans_a_real_library_when_explicitly_requested() {
-        let library =
-            std::env::var("TIME_ALBUM_REAL_LIBRARY").expect("TIME_ALBUM_REAL_LIBRARY must be set");
+        let library = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("project lives directly inside the media root");
         let database = std::env::var("TIME_ALBUM_REAL_DB").expect("TIME_ALBUM_REAL_DB must be set");
-        let report = run_core(
-            None,
-            Path::new(&library),
-            Path::new(&database),
-            &AtomicBool::new(false),
-        )
-        .expect("real library scan succeeds");
+        let report = run_core(None, library, Path::new(&database), &AtomicBool::new(false))
+            .expect("real library scan succeeds");
         assert_eq!(report.status, "completed");
         assert!(report.summary.total > 0);
         println!("{report:#?}");
