@@ -1,0 +1,356 @@
+:root {
+  color: #2c2d2a;
+  background: #f3f1eb;
+  font-family: "Noto Sans SC", "Microsoft YaHei UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 960px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 80% 5%, rgba(207, 184, 147, 0.19), transparent 24rem),
+    #f3f1eb;
+}
+
+button {
+  font: inherit;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  height: 100vh;
+  flex-direction: column;
+  padding: 30px 22px 24px;
+  color: #f7f4ec;
+  background: #242722;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 58px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid rgba(244, 224, 191, 0.45);
+  border-radius: 50%;
+  color: #efd9b7;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: 19px;
+}
+
+.brand strong,
+.brand small {
+  display: block;
+}
+
+.brand strong {
+  letter-spacing: 0.08em;
+}
+
+.brand small {
+  margin-top: 2px;
+  color: #969b91;
+  font-size: 11px;
+}
+
+nav {
+  display: grid;
+  gap: 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 13px;
+  border: 0;
+  border-radius: 8px;
+  color: #8e9489;
+  background: transparent;
+  text-align: left;
+}
+
+.nav-item span {
+  width: 18px;
+  color: #b1b6ab;
+  font-size: 18px;
+  text-align: center;
+}
+
+.nav-item.active {
+  color: #fcfaf4;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.nav-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.sidebar-foot {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: auto;
+  color: #8e9489;
+  font-size: 12px;
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #7ca37a;
+  box-shadow: 0 0 0 4px rgba(124, 163, 122, 0.12);
+}
+
+.topbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 40px 52px 26px;
+  border-bottom: 1px solid #dcdbd4;
+}
+
+.eyebrow,
+.section-label {
+  color: #89887f;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.topbar h1 {
+  margin: 6px 0 0;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: 26px;
+  font-weight: 600;
+}
+
+.readonly-pill {
+  padding: 7px 12px;
+  border: 1px solid #b8c7b3;
+  border-radius: 999px;
+  color: #4c6d4a;
+  background: #e7eee3;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.content {
+  display: grid;
+  gap: 22px;
+  padding: 36px 52px 60px;
+}
+
+.hero-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(290px, 0.7fr);
+  min-height: 400px;
+  overflow: hidden;
+  border: 1px solid #dedbd2;
+  border-radius: 16px;
+  background: rgba(252, 250, 245, 0.82);
+  box-shadow: 0 18px 50px rgba(56, 49, 36, 0.07);
+}
+
+.hero-copy {
+  padding: 54px 58px;
+}
+
+.hero-copy h2 {
+  max-width: 600px;
+  margin: 15px 0 20px;
+  color: #292b27;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: clamp(38px, 4.2vw, 58px);
+  line-height: 1.24;
+}
+
+.hero-copy p {
+  max-width: 570px;
+  margin: 0;
+  color: #76766e;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.primary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 34px;
+  margin-top: 34px;
+  padding: 13px 18px 13px 21px;
+  border: 0;
+  border-radius: 8px;
+  color: #fffdf7;
+  background: #343a32;
+  box-shadow: 0 8px 18px rgba(41, 47, 39, 0.18);
+  cursor: pointer;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: #20251f;
+  transform: translateY(-1px);
+}
+
+.primary-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.primary-button span {
+  color: #d8c5a5;
+  font-size: 18px;
+}
+
+.error-message {
+  margin-top: 18px !important;
+  color: #a14336 !important;
+}
+
+.safety-panel {
+  padding: 52px 38px;
+  color: #e8e9e3;
+  background:
+    linear-gradient(rgba(37, 45, 36, 0.94), rgba(37, 45, 36, 0.98)),
+    repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 8px,
+      rgba(255, 255, 255, 0.04) 8px,
+      rgba(255, 255, 255, 0.04) 9px
+    );
+}
+
+.shield {
+  display: grid;
+  width: 48px;
+  height: 54px;
+  place-items: center;
+  border: 1px solid #9db09a;
+  border-radius: 24px 24px 18px 18px;
+  color: #bad0b5;
+  font-size: 20px;
+}
+
+.safety-panel h3 {
+  margin: 24px 0 26px;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: 20px;
+}
+
+.safety-panel ul {
+  display: grid;
+  gap: 17px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.safety-panel li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: #b9bdb4;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.safety-panel li span {
+  color: #9dbc98;
+}
+
+.library-card {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) 1.4fr;
+  gap: 28px;
+  padding: 28px 32px 24px;
+  border: 1px solid #dedbd2;
+  border-radius: 14px;
+  background: rgba(252, 250, 245, 0.84);
+}
+
+.library-card h3 {
+  margin: 7px 0 8px;
+  font-family: "Noto Serif SC", "Songti SC", serif;
+  font-size: 21px;
+}
+
+.library-card code {
+  display: block;
+  overflow: hidden;
+  color: #7a796f;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-card dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(90px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.library-card dl div {
+  padding: 12px 14px;
+  border-left: 1px solid #dedbd2;
+}
+
+.library-card dt {
+  color: #929188;
+  font-size: 11px;
+}
+
+.library-card dd {
+  margin: 5px 0 0;
+  color: #3d4439;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.next-step {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding-top: 18px;
+  border-top: 1px solid #e4e1d8;
+  color: #85847c;
+  font-size: 12px;
+}
+
+@media (max-width: 1050px) {
+  .hero-copy {
+    padding: 44px 38px;
+  }
+
+  .content,
+  .topbar {
+    padding-right: 34px;
+    padding-left: 34px;
+  }
+}
