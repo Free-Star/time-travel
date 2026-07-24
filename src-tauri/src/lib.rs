@@ -161,6 +161,75 @@ fn timeline_window(
     database::timeline_window(&connection, &root, &month, offset, limit)
 }
 
+#[tauri::command]
+fn map_overview(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    month: Option<String>,
+) -> Result<database::MapOverview, String> {
+    let root = state
+        .root()?
+        .ok_or_else(|| "请先选择相册目录".to_string())?;
+    let connection = database::open(&app, &root)?;
+    database::map_overview(&connection, &root, month.as_deref())
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn map_clusters(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    west: f64,
+    east: f64,
+    south: f64,
+    north: f64,
+    zoom: u8,
+    month: Option<String>,
+) -> Result<Vec<database::MapCluster>, String> {
+    let root = state
+        .root()?
+        .ok_or_else(|| "请先选择相册目录".to_string())?;
+    let connection = database::open(&app, &root)?;
+    database::map_clusters(
+        &connection,
+        &root,
+        west,
+        east,
+        south,
+        north,
+        zoom,
+        month.as_deref(),
+    )
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn map_cluster_items(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    west: f64,
+    east: f64,
+    south: f64,
+    north: f64,
+    month: Option<String>,
+    limit: usize,
+) -> Result<database::MapClusterWindow, String> {
+    let root = state
+        .root()?
+        .ok_or_else(|| "请先选择相册目录".to_string())?;
+    let connection = database::open(&app, &root)?;
+    database::map_cluster_items(
+        &connection,
+        &root,
+        west,
+        east,
+        south,
+        north,
+        month.as_deref(),
+        limit,
+    )
+}
+
 fn prepare_media_for_view(
     app: &AppHandle,
     root: &std::path::Path,
@@ -243,6 +312,9 @@ pub fn run() {
             clear_thumbnail_cache,
             timeline_months,
             timeline_window,
+            map_overview,
+            map_clusters,
+            map_cluster_items,
             open_timeline_media,
             timeline_neighbor
         ])

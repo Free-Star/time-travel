@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
 import "./App.css";
+import MapView from "./MapView";
 import TimelineView from "./TimelineView";
 
 type LibrarySummary = {
@@ -72,7 +73,7 @@ type ThumbnailReport = {
 };
 
 function App() {
-  const [view, setView] = useState<"home" | "timeline">("home");
+  const [view, setView] = useState<"home" | "timeline" | "map">("home");
   const [library, setLibrary] = useState<LibrarySummary | null>(null);
   const [index, setIndex] = useState<IndexSummary | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
@@ -267,7 +268,15 @@ function App() {
           >
             <span>◷</span>时间线
           </button>
-          <button className="nav-item" type="button" disabled>
+          <button
+            className={`nav-item ${view === "map" ? "active" : ""}`}
+            type="button"
+            disabled={!index?.withLocation || index.needsMetadataRefresh}
+            onClick={() => {
+              setError("");
+              setView("map");
+            }}
+          >
             <span>⌖</span>地图
           </button>
         </nav>
@@ -281,10 +290,12 @@ function App() {
       <main>
         <header className="topbar">
           <div>
-            <span className="eyebrow">阶段 4 · 时间线与查看器</span>
+            <span className="eyebrow">阶段 5 · 时间与空间联动</span>
             <h1>
               {view === "timeline"
                 ? "沿着时间，重看记忆"
+                : view === "map"
+                  ? "记忆曾在哪里发生"
                 : library
                   ? "相册已连接"
                   : "连接你的相册库"}
@@ -293,7 +304,7 @@ function App() {
           <div className="readonly-pill">只读模式</div>
         </header>
 
-        {view === "timeline" && error && (
+        {view !== "home" && error && (
           <button className="global-error" type="button" onClick={() => setError("")}>
             {error}
             <span>×</span>
@@ -537,8 +548,10 @@ function App() {
             </section>
           ) : null}
           </section>
-        ) : index ? (
+        ) : view === "timeline" && index ? (
           <TimelineView totalMedia={index.total} onError={setError} />
+        ) : view === "map" && index ? (
+          <MapView totalLocated={index.withLocation} onError={setError} />
         ) : null}
       </main>
     </div>

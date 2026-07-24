@@ -103,6 +103,46 @@ pub struct TimelineWindow {
     pub items: Vec<TimelineItem>,
 }
 
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapOverview {
+    pub total: i64,
+    pub photos: i64,
+    pub videos: i64,
+    pub west: Option<f64>,
+    pub east: Option<f64>,
+    pub south: Option<f64>,
+    pub north: Option<f64>,
+    pub first_at: Option<String>,
+    pub last_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapCluster {
+    pub cell_x: i64,
+    pub cell_y: i64,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub total: i64,
+    pub photos: i64,
+    pub videos: i64,
+    pub first_at: String,
+    pub last_at: String,
+    pub representative_media_id: i64,
+    pub west: f64,
+    pub east: f64,
+    pub south: f64,
+    pub north: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapClusterWindow {
+    pub total: i64,
+    pub items: Vec<TimelineItem>,
+}
+
 pub fn open(app: &AppHandle, library_root: &Path) -> Result<Connection, String> {
     let database_path = database_path(app)?;
     open_at(&database_path, library_root)
@@ -113,7 +153,7 @@ pub fn open_at(database_path: &Path, library_root: &Path) -> Result<Connection, 
         .parent()
         .ok_or_else(|| "数据库路径没有父目录".to_string())?;
     safety::create_directory_outside_library(data_directory, library_root)?;
-    safety::ensure_write_outside_library(&database_path, library_root)?;
+    safety::ensure_write_outside_library(database_path, library_root)?;
 
     let connection =
         Connection::open(database_path).map_err(|error| format!("无法打开索引数据库：{error}"))?;
@@ -166,6 +206,8 @@ pub fn open_at(database_path: &Path, library_root: &Path) -> Result<Connection, 
             CREATE INDEX IF NOT EXISTS idx_media_library ON media(library_root);
             CREATE INDEX IF NOT EXISTS idx_media_library_captured
                 ON media(library_root, captured_at DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_media_library_location
+                ON media(library_root, latitude, longitude);
 
             CREATE TABLE IF NOT EXISTS thumbnails (
                 media_id            INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
@@ -600,6 +642,280 @@ fn is_month_key(value: &str) -> bool {
             .is_ok_and(|month| (1..=12).contains(&month))
 }
 
+pub fn map_overview(
+    connection: &Connection,
+    root: &Path,
+    month: Option<&str>,
+) -> Result<MapOverview, String> {
+    if month.is_some_and(|value| !is_month_key(value)) {
+        return Err("地图月份格式无效".to_string());
+    }
+    let base = "
+        SELECT
+            COUNT(*),
+            SUM(CASE WHEN media_kind = 'photo' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN media_kind = 'video' THEN 1 ELSE 0 END),
+            MIN(longitude), MAX(longitude), MIN(latitude), MAX(latitude),
+            MIN(captured_at), MAX(captured_at)
+        FROM media
+        WHERE library_root = ?1
+          AND latitude IS NOT NULL
+          AND longitude IS NOT NULL
+    ";
+    let map_row = |row: &rusqlite::Row<'_>| {
+        Ok(MapOverview {
+            total: row.get(0)?,
+            photos: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+            videos: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+            west: row.get(3)?,
+            east: row.get(4)?,
+            south: row.get(5)?,
+            north: row.get(6)?,
+            first_at: row.get(7)?,
+            last_at: row.get(8)?,
+        })
+    };
+    if let Some(month) = month {
+        connection
+            .query_row(
+                &format!("{base} AND captured_at LIKE ?2"),
+                params![root.to_string_lossy(), format!("{month}%")],
+                map_row,
+            )
+            .map_err(|error| format!("无法读取地图概览：{error}"))
+    } else {
+        connection
+            .query_row(base, [root.to_string_lossy().as_ref()], map_row)
+            .map_err(|error| format!("无法读取地图概览：{error}"))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn map_clusters(
+    connection: &Connection,
+    root: &Path,
+    west: f64,
+    east: f64,
+    south: f64,
+    north: f64,
+    zoom: u8,
+    month: Option<&str>,
+) -> Result<Vec<MapCluster>, String> {
+    validate_map_bounds(west, east, south, north)?;
+    if month.is_some_and(|value| !is_month_key(value)) {
+        return Err("地图月份格式无效".to_string());
+    }
+    let zoom = zoom.clamp(1, 18);
+    let cell_size = 84.375 / 2_f64.powi(i32::from(zoom));
+    let base = "
+        SELECT
+            CAST((longitude + 180.0) / ?6 AS INTEGER) AS cell_x,
+            CAST((latitude + 90.0) / ?6 AS INTEGER) AS cell_y,
+            AVG(latitude), AVG(longitude), COUNT(*),
+            SUM(CASE WHEN media_kind = 'photo' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN media_kind = 'video' THEN 1 ELSE 0 END),
+            MIN(captured_at), MAX(captured_at), MAX(id)
+        FROM media
+        WHERE library_root = ?1
+          AND longitude >= ?2 AND longitude <= ?3
+          AND latitude >= ?4 AND latitude <= ?5
+    ";
+    let suffix = "
+        GROUP BY cell_x, cell_y
+        ORDER BY COUNT(*) DESC
+        LIMIT 2000
+    ";
+    type ClusterRow = (i64, i64, f64, f64, i64, i64, i64, String, String, i64);
+    fn read_cluster_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClusterRow> {
+        Ok((
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+            row.get(3)?,
+            row.get(4)?,
+            row.get::<_, Option<i64>>(5)?.unwrap_or(0),
+            row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+            row.get(7)?,
+            row.get(8)?,
+            row.get(9)?,
+        ))
+    }
+
+    let sql = if month.is_some() {
+        format!("{base} AND captured_at LIKE ?7 {suffix}")
+    } else {
+        format!("{base} {suffix}")
+    };
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|error| format!("无法准备地图聚合查询：{error}"))?;
+    let rows = if let Some(month) = month {
+        statement.query_map(
+            params![
+                root.to_string_lossy(),
+                west,
+                east,
+                south,
+                north,
+                cell_size,
+                format!("{month}%")
+            ],
+            read_cluster_row,
+        )
+    } else {
+        statement.query_map(
+            params![root.to_string_lossy(), west, east, south, north, cell_size],
+            read_cluster_row,
+        )
+    }
+    .map_err(|error| format!("无法读取地图聚合：{error}"))?;
+
+    rows.map(|row| {
+        row.map(|row| {
+            let cell_west = row.0 as f64 * cell_size - 180.0;
+            let cell_south = row.1 as f64 * cell_size - 90.0;
+            MapCluster {
+                cell_x: row.0,
+                cell_y: row.1,
+                latitude: row.2,
+                longitude: row.3,
+                total: row.4,
+                photos: row.5,
+                videos: row.6,
+                first_at: row.7,
+                last_at: row.8,
+                representative_media_id: row.9,
+                west: cell_west,
+                east: (cell_west + cell_size).min(180.0),
+                south: cell_south,
+                north: (cell_south + cell_size).min(90.0),
+            }
+        })
+        .map_err(|error| format!("无法解析地图聚合：{error}"))
+    })
+    .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn map_cluster_items(
+    connection: &Connection,
+    root: &Path,
+    west: f64,
+    east: f64,
+    south: f64,
+    north: f64,
+    month: Option<&str>,
+    limit: usize,
+) -> Result<MapClusterWindow, String> {
+    validate_map_bounds(west, east, south, north)?;
+    if month.is_some_and(|value| !is_month_key(value)) {
+        return Err("地图月份格式无效".to_string());
+    }
+    let condition = "
+        m.library_root = ?1
+        AND m.longitude >= ?2 AND m.longitude < ?3
+        AND m.latitude >= ?4 AND m.latitude < ?5
+    ";
+    let month_clause = if month.is_some() {
+        " AND m.captured_at LIKE ?6"
+    } else {
+        ""
+    };
+    let count_sql = format!("SELECT COUNT(*) FROM media m WHERE {condition}{month_clause}");
+    let total = if let Some(month) = month {
+        connection.query_row(
+            &count_sql,
+            params![
+                root.to_string_lossy(),
+                west,
+                east,
+                south,
+                north,
+                format!("{month}%")
+            ],
+            |row| row.get(0),
+        )
+    } else {
+        connection.query_row(
+            &count_sql,
+            params![root.to_string_lossy(), west, east, south, north],
+            |row| row.get(0),
+        )
+    }
+    .map_err(|error| format!("无法统计地图区域媒体：{error}"))?;
+
+    let limit_parameter = if month.is_some() { 7 } else { 6 };
+    let sql = format!(
+        "
+        SELECT
+            m.id, m.path, m.relative_path, m.media_kind, m.extension,
+            m.size_bytes, m.captured_at, m.captured_source,
+            m.captured_precision, m.latitude, m.longitude, m.width, m.height,
+            CASE
+                WHEN t.status = 'ready' AND t.source_modified_ns = m.modified_ns
+                THEN t.cache_path
+                ELSE NULL
+            END
+        FROM media m
+        LEFT JOIN thumbnails t ON t.media_id = m.id
+        WHERE {condition}{month_clause}
+        ORDER BY m.captured_at DESC, m.id DESC
+        LIMIT ?{limit_parameter}
+        "
+    );
+    let mut statement = connection
+        .prepare(&sql)
+        .map_err(|error| format!("无法准备地图区域媒体查询：{error}"))?;
+    let rows = if let Some(month) = month {
+        statement.query_map(
+            params![
+                root.to_string_lossy(),
+                west,
+                east,
+                south,
+                north,
+                format!("{month}%"),
+                limit.clamp(1, 120) as i64
+            ],
+            map_timeline_item,
+        )
+    } else {
+        statement.query_map(
+            params![
+                root.to_string_lossy(),
+                west,
+                east,
+                south,
+                north,
+                limit.clamp(1, 120) as i64
+            ],
+            map_timeline_item,
+        )
+    }
+    .map_err(|error| format!("无法读取地图区域媒体：{error}"))?;
+    let items = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("无法解析地图区域媒体：{error}"))?;
+
+    Ok(MapClusterWindow { total, items })
+}
+
+fn validate_map_bounds(west: f64, east: f64, south: f64, north: f64) -> Result<(), String> {
+    if ![west, east, south, north]
+        .iter()
+        .all(|value| value.is_finite())
+        || west < -180.0
+        || east > 180.0
+        || south < -90.0
+        || north > 90.0
+        || west >= east
+        || south >= north
+    {
+        return Err("地图视口范围无效".to_string());
+    }
+    Ok(())
+}
+
 pub fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
@@ -873,6 +1189,21 @@ mod tests {
                 )
                 .expect("insert fixture media");
         }
+        for (relative, latitude, longitude) in [
+            ("2025/02/new.jpg", 31.2304, 121.4737),
+            ("2025/02/old.mp4", 39.9042, 116.4074),
+            ("2025/01/first.jpg", 48.8566, 2.3522),
+        ] {
+            connection
+                .execute(
+                    "
+                    UPDATE media SET latitude = ?2, longitude = ?3
+                    WHERE relative_path = ?1
+                    ",
+                    params![relative, latitude, longitude],
+                )
+                .expect("add fixture location");
+        }
         (base, root, connection)
     }
 
@@ -940,6 +1271,43 @@ mod tests {
     }
 
     #[test]
+    fn map_queries_are_filtered_clustered_and_bounded() {
+        let (base, root, connection) = timeline_fixture();
+        let overview = map_overview(&connection, &root, None).expect("query map overview");
+        assert_eq!(overview.total, 3);
+        assert_eq!(overview.photos, 2);
+        assert_eq!(overview.videos, 1);
+
+        let february =
+            map_overview(&connection, &root, Some("2025-02")).expect("query filtered overview");
+        assert_eq!(february.total, 2);
+
+        let clusters = map_clusters(&connection, &root, -180.0, 180.0, -85.0, 85.0, 5, None)
+            .expect("query map clusters");
+        assert!(!clusters.is_empty());
+        assert_eq!(clusters.iter().map(|cluster| cluster.total).sum::<i64>(), 3);
+
+        let cluster = &clusters[0];
+        let items = map_cluster_items(
+            &connection,
+            &root,
+            cluster.west,
+            cluster.east,
+            cluster.south,
+            cluster.north,
+            None,
+            20,
+        )
+        .expect("query cluster items");
+        assert!(items.total > 0);
+        assert!(!items.items.is_empty());
+        assert!(map_clusters(&connection, &root, 20.0, 10.0, -10.0, 10.0, 4, None).is_err());
+
+        drop(connection);
+        fs::remove_dir_all(base).expect("remove map fixture");
+    }
+
+    #[test]
     #[ignore = "requires TIME_ALBUM_REAL_DB"]
     fn real_timeline_query_when_explicitly_requested() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -962,6 +1330,47 @@ mod tests {
             "months={}, first_window={}, elapsed_ms={}",
             months.len(),
             first.items.len(),
+            started.elapsed().as_millis()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires TIME_ALBUM_REAL_DB"]
+    fn real_map_query_when_explicitly_requested() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("project lives directly inside the media root")
+            .to_path_buf();
+        let root = safety::canonical_existing(&root).expect("canonicalize real library");
+        let database_path =
+            PathBuf::from(env::var("TIME_ALBUM_REAL_DB").expect("TIME_ALBUM_REAL_DB must be set"));
+        let started = Instant::now();
+        let connection = open_at(&database_path, &root).expect("open real database");
+        let overview = map_overview(&connection, &root, None).expect("query real map overview");
+        assert_eq!(overview.total, 12_158);
+        let clusters = map_clusters(&connection, &root, -180.0, 180.0, -85.0, 85.0, 4, None)
+            .expect("query real map clusters");
+        assert!(!clusters.is_empty());
+        let first_cluster = &clusters[0];
+        let items = map_cluster_items(
+            &connection,
+            &root,
+            first_cluster.west,
+            first_cluster.east,
+            first_cluster.south,
+            first_cluster.north,
+            None,
+            40,
+        )
+        .expect("query real cluster items");
+        assert!(!items.items.is_empty());
+        assert!(items.items.len() <= 40);
+        println!(
+            "located={}, clusters={}, first_cluster_items={}, elapsed_ms={}",
+            overview.total,
+            clusters.len(),
+            items.items.len(),
             started.elapsed().as_millis()
         );
     }

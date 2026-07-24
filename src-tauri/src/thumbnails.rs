@@ -136,7 +136,7 @@ fn generate_core(
     media_ids: Option<&[i64]>,
 ) -> Result<ThumbnailReport, String> {
     let root = safety::canonical_existing(library_root)?;
-    safety::create_directory_outside_library(&cache, &root)?;
+    safety::create_directory_outside_library(cache, &root)?;
     let connection = database::open_at(database_path, &root)?;
     let candidates = if let Some(media_ids) = media_ids {
         database::thumbnail_candidates_by_ids(&connection, &root, media_ids)?
@@ -169,7 +169,7 @@ fn generate_core(
         let generated = if candidate.media_kind == "photo" {
             generate_image(media_path, &output, &root)
         } else if let Some(ffmpeg) = ffmpeg.as_deref() {
-            generate_video(ffmpeg, media_path, &output, &root, &cache)
+            generate_video(ffmpeg, media_path, &output, &root, cache)
         } else {
             Err("未找到 FFmpeg，无法生成视频封面".to_string())
         };

@@ -132,7 +132,7 @@ fn run_core(
                     progress.unchanged,
                     progress.errors,
                 )?;
-                return Ok(report(&connection, &root, progress, 0)?);
+                return report(&connection, &root, progress, 0);
             }
 
             let entry = match entry {

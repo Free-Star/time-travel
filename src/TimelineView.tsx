@@ -1,5 +1,8 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import MediaViewer from "./MediaViewer";
+import type { TimelineItem } from "./media";
+import { dateFromArchive } from "./media";
 import "./TimelineView.css";
 
 type TimelineMonth = {
@@ -8,23 +11,6 @@ type TimelineMonth = {
   photos: number;
   videos: number;
   withLocation: number;
-};
-
-type TimelineItem = {
-  id: number;
-  path: string;
-  relativePath: string;
-  mediaKind: "photo" | "video";
-  extension: string;
-  sizeBytes: number;
-  capturedAt: string;
-  capturedSource: string;
-  capturedPrecision: string;
-  latitude: number | null;
-  longitude: number | null;
-  width: number | null;
-  height: number | null;
-  thumbnailPath: string | null;
 };
 
 type TimelineWindow = {
@@ -60,43 +46,10 @@ const dayFormatter = new Intl.DateTimeFormat("zh-CN", {
   hour: "2-digit",
   minute: "2-digit",
 });
-const fullDateFormatter = new Intl.DateTimeFormat("zh-CN", {
-  year: "numeric",
-  month: "long",
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-});
 const numberFormatter = new Intl.NumberFormat("zh-CN");
-
-function dateFromArchive(value: string) {
-  return new Date(value.includes("T") ? value : `${value}T12:00:00`);
-}
 
 function formatMonth(key: string) {
   return monthFormatter.format(new Date(`${key}-01T12:00:00`));
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-function captureSourceLabel(source: string, precision: string) {
-  const sourceLabels: Record<string, string> = {
-    exif: "照片 EXIF",
-    filename: "文件名",
-    folder: "归档目录",
-    modified: "文件时间",
-  };
-  const precisionLabels: Record<string, string> = {
-    second: "精确到秒",
-    day: "精确到天",
-    month: "精确到月",
-  };
-  return `${sourceLabels[source] ?? source} · ${precisionLabels[precision] ?? precision}`;
 }
 
 export default function TimelineView({ totalMedia, onError }: TimelineViewProps) {
@@ -110,8 +63,6 @@ export default function TimelineView({ totalMedia, onError }: TimelineViewProps)
   const [generating, setGenerating] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [viewer, setViewer] = useState<TimelineItem | null>(null);
-  const [viewerLoading, setViewerLoading] = useState(false);
-  const [viewerError, setViewerError] = useState("");
   const [failedImages, setFailedImages] = useState<Set<number>>(() => new Set());
 
   useEffect(() => {
@@ -179,26 +130,6 @@ export default function TimelineView({ totalMedia, onError }: TimelineViewProps)
     return () => window.clearTimeout(timer);
   }, [onError, refreshKey, selectedMonth, windowLimit, windowOffset]);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (!viewer) return;
-      if (event.key === "Escape") setViewer(null);
-      if (event.key === "ArrowLeft") void navigateViewer("newer");
-      if (event.key === "ArrowRight") void navigateViewer("older");
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  });
-
-  useEffect(() => {
-    if (!viewer) return;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previous;
-    };
-  }, [viewer]);
-
   const visibleMissingIds = useMemo(
     () =>
       (timelineWindow?.items ?? [])
@@ -245,31 +176,10 @@ export default function TimelineView({ totalMedia, onError }: TimelineViewProps)
   }
 
   async function openViewer(mediaId: number) {
-    setViewerLoading(true);
-    setViewerError("");
     try {
       setViewer(await invoke<TimelineItem>("open_timeline_media", { mediaId }));
     } catch (reason) {
       onError(String(reason));
-    } finally {
-      setViewerLoading(false);
-    }
-  }
-
-  async function navigateViewer(direction: "newer" | "older") {
-    if (!viewer || viewerLoading) return;
-    setViewerLoading(true);
-    setViewerError("");
-    try {
-      const next = await invoke<TimelineItem | null>("timeline_neighbor", {
-        mediaId: viewer.id,
-        direction,
-      });
-      if (next) setViewer(next);
-    } catch (reason) {
-      setViewerError(String(reason));
-    } finally {
-      setViewerLoading(false);
     }
   }
 
@@ -324,7 +234,6 @@ export default function TimelineView({ totalMedia, onError }: TimelineViewProps)
               <button
                 className="secondary-button timeline-cache-button"
                 type="button"
-                disabled={viewerLoading}
                 onClick={generating ? stopGenerating : generateVisiblePreviews}
               >
                 {generating
@@ -410,102 +319,12 @@ export default function TimelineView({ totalMedia, onError }: TimelineViewProps)
       </section>
 
       {viewer && (
-        <div className="viewer-backdrop" role="dialog" aria-modal="true" aria-label="媒体查看器">
-          <button
-            className="viewer-close"
-            type="button"
-            aria-label="关闭查看器"
-            onClick={() => setViewer(null)}
-          >
-            ×
-          </button>
-          <button
-            className="viewer-nav previous"
-            type="button"
-            aria-label="查看较新媒体"
-            disabled={viewerLoading}
-            onClick={() => navigateViewer("newer")}
-          >
-            ‹
-          </button>
-
-          <div className="viewer-canvas">
-            {viewer.mediaKind === "video" ? (
-              <video
-                key={viewer.id}
-                src={convertFileSrc(viewer.path)}
-                controls
-                autoPlay
-                preload="metadata"
-                onError={() => setViewerError("当前视频编码无法由系统播放器直接预览。")}
-              />
-            ) : viewerError && viewer.thumbnailPath ? (
-              <img src={convertFileSrc(viewer.thumbnailPath)} alt="" />
-            ) : (
-              <img
-                key={viewer.id}
-                src={convertFileSrc(viewer.path)}
-                alt={viewer.relativePath}
-                onError={() =>
-                  setViewerError("原图格式暂不支持直接显示，已保留只读文件信息。")
-                }
-              />
-            )}
-            {viewerLoading && <div className="viewer-busy">正在打开…</div>}
-            {viewerError && <div className="viewer-warning">{viewerError}</div>}
-          </div>
-
-          <aside className="viewer-details">
-            <span className="section-label">
-              {viewer.mediaKind === "video" ? "VIDEO" : "PHOTO"}
-            </span>
-            <h3>{viewer.relativePath.split(/[\\/]/).pop()}</h3>
-            <p className="viewer-path">{viewer.relativePath}</p>
-            <dl>
-              <div>
-                <dt>拍摄时间</dt>
-                <dd>{fullDateFormatter.format(dateFromArchive(viewer.capturedAt))}</dd>
-              </div>
-              <div>
-                <dt>时间依据</dt>
-                <dd>
-                  {captureSourceLabel(viewer.capturedSource, viewer.capturedPrecision)}
-                </dd>
-              </div>
-              <div>
-                <dt>尺寸</dt>
-                <dd>
-                  {viewer.width && viewer.height
-                    ? `${numberFormatter.format(viewer.width)} × ${numberFormatter.format(viewer.height)}`
-                    : "未记录"}
-                </dd>
-              </div>
-              <div>
-                <dt>文件大小</dt>
-                <dd>{formatBytes(viewer.sizeBytes)}</dd>
-              </div>
-              <div>
-                <dt>位置</dt>
-                <dd>
-                  {viewer.latitude != null && viewer.longitude != null
-                    ? `${viewer.latitude.toFixed(5)}, ${viewer.longitude.toFixed(5)}`
-                    : "无定位信息"}
-                </dd>
-              </div>
-            </dl>
-            <p className="viewer-readonly">只读打开 · 不修改原始媒体</p>
-          </aside>
-
-          <button
-            className="viewer-nav next"
-            type="button"
-            aria-label="查看较旧媒体"
-            disabled={viewerLoading}
-            onClick={() => navigateViewer("older")}
-          >
-            ›
-          </button>
-        </div>
+        <MediaViewer
+          item={viewer}
+          onChange={setViewer}
+          onClose={() => setViewer(null)}
+          onError={onError}
+        />
       )}
     </>
   );
