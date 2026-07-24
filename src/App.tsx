@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useState } from "react";
@@ -39,49 +39,12 @@ type ScanReport = ScanProgress & {
   summary: IndexSummary;
 };
 
-type ThumbnailStatus = {
-  totalMedia: number;
-  ready: number;
-  failed: number;
-  cacheBytes: number;
-  ffmpegAvailable: boolean;
-};
-
-type ThumbnailPreview = {
-  mediaId: number;
-  mediaKind: "photo" | "video";
-  capturedAt: string;
-  cachePath: string;
-};
-
-type ThumbnailProgress = {
-  status: "generating" | "completed" | "cancelled";
-  total: number;
-  processed: number;
-  ready: number;
-  failed: number;
-  currentPath: string;
-};
-
-type ThumbnailReport = {
-  status: string;
-  processed: number;
-  ready: number;
-  failed: number;
-  thumbnailStatus: ThumbnailStatus;
-  previews: ThumbnailPreview[];
-};
-
 function App() {
   const [view, setView] = useState<"home" | "timeline" | "map">("home");
   const [library, setLibrary] = useState<LibrarySummary | null>(null);
   const [index, setIndex] = useState<IndexSummary | null>(null);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const [scanning, setScanning] = useState(false);
-  const [thumbnailStatus, setThumbnailStatus] = useState<ThumbnailStatus | null>(null);
-  const [thumbnailPreviews, setThumbnailPreviews] = useState<ThumbnailPreview[]>([]);
-  const [thumbnailProgress, setThumbnailProgress] = useState<ThumbnailProgress | null>(null);
-  const [generatingThumbnails, setGeneratingThumbnails] = useState(false);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
 
@@ -104,31 +67,13 @@ function App() {
     };
   }, []);
 
-  useEffect(() => {
-    const unlisten = listen<ThumbnailProgress>("thumbnail-progress", (event) => {
-      setThumbnailProgress(event.payload);
-    });
-    return () => {
-      void unlisten.then((dispose) => dispose());
-    };
-  }, []);
-
   async function loadLibraryData() {
-    await Promise.all([loadIndex(), loadThumbnailData()]);
+    await loadIndex();
   }
 
   async function loadIndex() {
     const summary = await invoke<IndexSummary | null>("current_index");
     setIndex(summary);
-  }
-
-  async function loadThumbnailData() {
-    const [status, previews] = await Promise.all([
-      invoke<ThumbnailStatus | null>("thumbnail_status"),
-      invoke<ThumbnailPreview[]>("thumbnail_previews", { limit: 12 }),
-    ]);
-    setThumbnailStatus(status);
-    setThumbnailPreviews(previews);
   }
 
   async function chooseLibrary() {
@@ -182,57 +127,6 @@ function App() {
     await invoke<boolean>("cancel_scan");
   }
 
-  async function generateThumbnailBatch() {
-    setError("");
-    setGeneratingThumbnails(true);
-    setThumbnailProgress({
-      status: "generating",
-      total: 0,
-      processed: 0,
-      ready: 0,
-      failed: 0,
-      currentPath: "",
-    });
-    try {
-      const report = await invoke<ThumbnailReport>("generate_thumbnails", { limit: 30 });
-      setThumbnailStatus(report.thumbnailStatus);
-      setThumbnailPreviews(report.previews);
-      setThumbnailProgress((current) =>
-        current
-          ? { ...current, status: report.status as ThumbnailProgress["status"] }
-          : current,
-      );
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setGeneratingThumbnails(false);
-    }
-  }
-
-  async function cancelThumbnailBatch() {
-    await invoke<boolean>("cancel_thumbnails");
-  }
-
-  async function clearThumbnailCache() {
-    if (!window.confirm("只清除时空相册生成的预览缓存，原始媒体不会受到影响。继续吗？")) {
-      return;
-    }
-    setError("");
-    try {
-      const status = await invoke<ThumbnailStatus>("clear_thumbnail_cache");
-      setThumbnailStatus(status);
-      setThumbnailPreviews([]);
-      setThumbnailProgress(null);
-    } catch (reason) {
-      setError(String(reason));
-    }
-  }
-
-  function formatBytes(bytes: number) {
-    if (bytes < 1024 * 1024) return `${Math.max(0, Math.round(bytes / 1024))} KB`;
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  }
-
   const number = new Intl.NumberFormat("zh-CN");
 
   return (
@@ -241,8 +135,8 @@ function App() {
         <div className="brand">
           <span className="brand-mark">时</span>
           <div>
-            <strong>时空相册</strong>
-            <small>个人记忆库</small>
+            <strong>TimeTravel</strong>
+            <small>by freestar</small>
           </div>
         </div>
 
@@ -250,10 +144,7 @@ function App() {
           <button
             className={`nav-item ${view === "home" ? "active" : ""}`}
             type="button"
-            onClick={() => {
-              setView("home");
-              if (library) void loadThumbnailData();
-            }}
+            onClick={() => setView("home")}
           >
             <span>⌁</span>开始
           </button>
@@ -301,7 +192,7 @@ function App() {
                   : "连接你的相册库"}
             </h1>
           </div>
-          <div className="readonly-pill">只读模式</div>
+          {view !== "map" && <div className="readonly-pill">只读模式</div>}
         </header>
 
         {view !== "home" && error && (
@@ -322,7 +213,7 @@ function App() {
                 不改变原件。
               </h2>
               <p>
-                时空相册只读取媒体和元数据。索引、缩略图与所有人工修正都会保存在相册目录之外。
+                TimeTravel 只读取媒体和元数据。索引、缩略图与所有人工修正都会保存在相册目录之外。
               </p>
 
               <button
@@ -470,81 +361,43 @@ function App() {
           )}
 
           {library && index?.total ? (
-            <section className="thumbnail-card">
-              <div className="scan-heading">
-                <div>
-                  <span className="section-label">缩略图与视频封面</span>
-                  <h3>
-                    {number.format(thumbnailStatus?.ready ?? 0)} / {number.format(index.total)}{" "}
-                    已就绪
-                  </h3>
-                  <p>
-                    缓存 {formatBytes(thumbnailStatus?.cacheBytes ?? 0)} · FFmpeg{" "}
-                    {thumbnailStatus?.ffmpegAvailable ? "可用" : "不可用"}
-                  </p>
-                </div>
-                <div className="scan-actions">
-                  {generatingThumbnails ? (
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={cancelThumbnailBatch}
-                    >
-                      停止生成
-                    </button>
-                  ) : (
-                    <button
-                      className="primary-button compact"
-                      type="button"
-                      onClick={generateThumbnailBatch}
-                    >
-                      生成下一批 30 个
-                      <span>→</span>
-                    </button>
-                  )}
-                  {(thumbnailStatus?.ready ?? 0) > 0 && !generatingThumbnails && (
-                    <button className="text-button" type="button" onClick={clearThumbnailCache}>
-                      清理缓存
-                    </button>
-                  )}
-                </div>
+            <section className="explore-card" aria-label="浏览相册">
+              <div className="explore-heading">
+                <span className="section-label">开始浏览</span>
+                <h3>从时间或地点，重新走进记忆</h3>
               </div>
-
-              {thumbnailProgress && (
-                <div className={`scan-progress ${thumbnailProgress.status}`}>
-                  <span className="scan-pulse" />
+              <div className="explore-actions">
+                <button
+                  type="button"
+                  disabled={index.needsMetadataRefresh}
+                  onClick={() => {
+                    setError("");
+                    setView("timeline");
+                  }}
+                >
+                  <span className="explore-icon">◷</span>
                   <div>
-                    <strong>
-                      {thumbnailProgress.status === "generating"
-                        ? `正在生成 · ${number.format(thumbnailProgress.processed)} / ${number.format(thumbnailProgress.total)}`
-                        : thumbnailProgress.status === "completed"
-                          ? "本批预览已完成"
-                          : "预览生成已停止"}
-                    </strong>
-                    <small>
-                      成功 {number.format(thumbnailProgress.ready)} · 失败{" "}
-                      {number.format(thumbnailProgress.failed)}
-                    </small>
+                    <strong>沿时间线浏览</strong>
+                    <small>{number.format(index.total)} 个媒体 · 按年月组织</small>
                   </div>
-                </div>
-              )}
-
-              {thumbnailPreviews.length > 0 && (
-                <div className="preview-grid">
-                  {thumbnailPreviews.map((preview) => (
-                    <figure key={preview.mediaId}>
-                      <img
-                        src={convertFileSrc(preview.cachePath)}
-                        alt={new Date(preview.capturedAt).toLocaleDateString("zh-CN")}
-                      />
-                      {preview.mediaKind === "video" && <span className="video-badge">▶</span>}
-                      <figcaption>
-                        {new Date(preview.capturedAt).toLocaleDateString("zh-CN")}
-                      </figcaption>
-                    </figure>
-                  ))}
-                </div>
-              )}
+                  <span className="explore-arrow">→</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={!index.withLocation || index.needsMetadataRefresh}
+                  onClick={() => {
+                    setError("");
+                    setView("map");
+                  }}
+                >
+                  <span className="explore-icon">⌖</span>
+                  <div>
+                    <strong>在地图上查看</strong>
+                    <small>{number.format(index.withLocation)} 个坐标 · 按地点聚合</small>
+                  </div>
+                  <span className="explore-arrow">→</span>
+                </button>
+              </div>
             </section>
           ) : null}
           </section>

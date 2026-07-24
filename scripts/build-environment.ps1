@@ -1,6 +1,9 @@
 function Enter-TimeAlbumBuildEnvironment {
     $projectDrive = [System.IO.Path]::GetPathRoot($PSScriptRoot)
     $env:CARGO_TARGET_DIR = Join-Path $projectDrive 'TimeAlbumBuild\time-album'
+    # Windows linker can retain incompatible LLVM objects in Cargo's incremental
+    # cache. Keep project builds deterministic across every startup entry point.
+    $env:CARGO_INCREMENTAL = '0'
 
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (-not (Test-Path -LiteralPath $vswhere)) {

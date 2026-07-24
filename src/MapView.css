@@ -55,7 +55,7 @@
   display: grid;
   min-width: 0;
   align-items: center;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: auto auto minmax(0, 1fr);
   gap: 12px;
   padding-top: 10px;
 }
@@ -211,6 +211,36 @@
   border: 1px solid #dad6cb;
   border-radius: 8px;
   background: #dad6cb;
+}
+
+.map-heading-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.marker-display-toggle {
+  display: flex;
+  padding: 3px;
+  border: 1px solid #dad6cb;
+  border-radius: 8px;
+  background: #ebe8df;
+}
+
+.marker-display-toggle button {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 5px;
+  color: #85837b;
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.marker-display-toggle button.active {
+  color: #fffdf7;
+  background: #4c5b49;
+  box-shadow: 0 2px 7px rgba(48, 61, 46, 0.18);
 }
 
 .map-heading-stats div {
@@ -416,6 +446,40 @@
   z-index: 4;
   background: #8b5946;
   transform: translate(-50%, -50%) scale(1.08);
+}
+
+.map-marker.thumbnail {
+  overflow: hidden;
+  padding: 0;
+  background: #526c51;
+}
+
+.map-marker.thumbnail img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  object-position: center;
+  pointer-events: none;
+}
+
+.map-marker.thumbnail span {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  padding: 0 5px;
+  border: 2px solid #fff;
+  border-radius: 10px;
+  color: #fff;
+  background: #526c51;
+  box-sizing: border-box;
+  font-size: 8px;
+  pointer-events: none;
 }
 
 .map-loading,

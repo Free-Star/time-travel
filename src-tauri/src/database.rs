@@ -131,6 +131,7 @@ pub struct MapCluster {
     pub first_at: String,
     pub last_at: String,
     pub representative_media_id: i64,
+    pub thumbnail_path: Option<String>,
     pub west: f64,
     pub east: f64,
     pub south: f64,
@@ -729,21 +730,39 @@ pub fn map_clusters(
         SELECT
             CAST((longitude + 180.0) / ?6 AS INTEGER) AS cell_x,
             CAST((latitude + 90.0) / ?6 AS INTEGER) AS cell_y,
-            AVG(latitude), AVG(longitude), COUNT(*),
-            SUM(CASE WHEN media_kind = 'photo' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN media_kind = 'video' THEN 1 ELSE 0 END),
-            MIN(captured_at), MAX(captured_at), MAX(id)
-        FROM media
-        WHERE library_root = ?1
-          AND longitude >= ?2 AND longitude <= ?3
-          AND latitude >= ?4 AND latitude <= ?5
+            AVG(m.latitude), AVG(m.longitude), COUNT(*),
+            SUM(CASE WHEN m.media_kind = 'photo' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN m.media_kind = 'video' THEN 1 ELSE 0 END),
+            MIN(m.captured_at), MAX(m.captured_at), MAX(m.id),
+            MAX(CASE
+                WHEN t.status = 'ready' AND t.source_modified_ns = m.modified_ns
+                THEN t.cache_path
+                ELSE NULL
+            END)
+        FROM media m
+        LEFT JOIN thumbnails t ON t.media_id = m.id
+        WHERE m.library_root = ?1
+          AND m.longitude >= ?2 AND m.longitude <= ?3
+          AND m.latitude >= ?4 AND m.latitude <= ?5
     ";
     let suffix = "
         GROUP BY cell_x, cell_y
         ORDER BY COUNT(*) DESC
         LIMIT 2000
     ";
-    type ClusterRow = (i64, i64, f64, f64, i64, i64, i64, String, String, i64);
+    type ClusterRow = (
+        i64,
+        i64,
+        f64,
+        f64,
+        i64,
+        i64,
+        i64,
+        String,
+        String,
+        i64,
+        Option<String>,
+    );
     fn read_cluster_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClusterRow> {
         Ok((
             row.get(0)?,
@@ -756,6 +775,7 @@ pub fn map_clusters(
             row.get(7)?,
             row.get(8)?,
             row.get(9)?,
+            row.get(10)?,
         ))
     }
 
@@ -803,6 +823,7 @@ pub fn map_clusters(
                 first_at: row.7,
                 last_at: row.8,
                 representative_media_id: row.9,
+                thumbnail_path: row.10,
                 west: cell_west,
                 east: (cell_west + cell_size).min(180.0),
                 south: cell_south,

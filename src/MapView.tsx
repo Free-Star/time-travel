@@ -38,6 +38,7 @@ type MapCluster = {
   firstAt: string;
   lastAt: string;
   representativeMediaId: number;
+  thumbnailPath: string | null;
   west: number;
   east: number;
   south: number;
@@ -59,6 +60,8 @@ type MapViewProps = {
   totalLocated: number;
   onError: (message: string) => void;
 };
+
+type MarkerDisplay = "count" | "thumbnail";
 
 type Point = { x: number; y: number };
 type Center = { longitude: number; latitude: number };
@@ -253,6 +256,8 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
   const timelineRef = useRef<HTMLDivElement>(null);
   const clusterRequest = useRef(0);
   const automaticPreviewJob = useRef(false);
+  const markerPreviewJob = useRef(false);
+  const timelineWheelLocked = useRef(false);
   const countyRequests = useRef(new Set<string>());
   const dragState = useRef<{
     pointerId: number;
@@ -283,6 +288,12 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
   const [failedImages, setFailedImages] = useState<Set<number>>(() => new Set());
   const [generating, setGenerating] = useState(false);
   const [previewQueueTick, setPreviewQueueTick] = useState(0);
+  const [markerPreviewTick, setMarkerPreviewTick] = useState(0);
+  const [markerDisplay, setMarkerDisplay] = useState<MarkerDisplay>(() =>
+    window.localStorage.getItem("time-album-map-marker-display") === "thumbnail"
+      ? "thumbnail"
+      : "count",
+  );
   const displayMonths = useMemo(() => [...months].reverse(), [months]);
 
   useEffect(() => {
@@ -294,6 +305,16 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
   useEffect(() => {
     const unlisten = listen<ThumbnailResult>("thumbnail-result", (event) => {
       const result = event.payload;
+      setClusters((current) =>
+        current.map((cluster) =>
+          cluster.representativeMediaId === result.mediaId
+            ? {
+                ...cluster,
+                thumbnailPath: result.status === "ready" ? result.cachePath : null,
+              }
+            : cluster,
+        ),
+      );
       setClusterWindow((current) =>
         current
           ? {
@@ -516,6 +537,44 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
     [centerWorld, clusters, viewport, zoom],
   );
 
+  const markerPreviewIds = useMemo(
+    () =>
+      markerDisplay === "thumbnail"
+        ? visibleClusters
+            .map(({ cluster }) => cluster)
+            .filter((cluster) => !cluster.thumbnailPath)
+            .slice(0, 48)
+            .map((cluster) => cluster.representativeMediaId)
+        : [],
+    [markerDisplay, visibleClusters],
+  );
+  const markerPreviewKey = markerPreviewIds.join(",");
+
+  useEffect(() => {
+    if (!markerPreviewKey || markerPreviewJob.current) return;
+    const timer = window.setTimeout(() => {
+      markerPreviewJob.current = true;
+      invoke<unknown | null>("ensure_timeline_thumbnails", {
+        mediaIds: markerPreviewIds,
+      })
+        .then((report) => {
+          if (!report) {
+            window.setTimeout(() => setMarkerPreviewTick((value) => value + 1), 400);
+          }
+        })
+        .catch((reason) => onError(String(reason)))
+        .finally(() => {
+          markerPreviewJob.current = false;
+        });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [markerPreviewIds, markerPreviewKey, markerPreviewTick, onError]);
+
+  function changeMarkerDisplay(display: MarkerDisplay) {
+    setMarkerDisplay(display);
+    window.localStorage.setItem("time-album-map-marker-display", display);
+  }
+
   const countryPaths = useMemo(() => {
     const longitudePadding = Math.max(2, (bounds.east - bounds.west) * 0.08);
     const latitudePadding = Math.max(2, (bounds.north - bounds.south) * 0.08);
@@ -671,6 +730,30 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
     setSelectedMonth(month);
   }
 
+  function handleTimelineWheel(event: React.WheelEvent<HTMLElement>) {
+    event.preventDefault();
+    if (timelineWheelLocked.current || displayMonths.length === 0) return;
+
+    const direction = event.deltaY !== 0 ? Math.sign(event.deltaY) : Math.sign(event.deltaX);
+    if (direction === 0) return;
+
+    const currentIndex = selectedMonth
+      ? displayMonths.findIndex((month) => month.key === selectedMonth)
+      : -1;
+    const nextIndex =
+      currentIndex < 0
+        ? direction > 0
+          ? 0
+          : displayMonths.length - 1
+        : Math.max(0, Math.min(displayMonths.length - 1, currentIndex + direction));
+
+    selectMonth(displayMonths[nextIndex].key);
+    timelineWheelLocked.current = true;
+    window.setTimeout(() => {
+      timelineWheelLocked.current = false;
+    }, 160);
+  }
+
   function fitCurrentOverview() {
     if (!overview?.total) return;
     setCenter(overviewCenter(overview));
@@ -812,14 +895,32 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
                   : "正在读取坐标…"}
               </p>
             </div>
-            <div className="map-heading-stats">
-              <div>
-                <span>当前筛选</span>
-                <strong>{numberFormatter.format(overview?.total ?? 0)}</strong>
+            <div className="map-heading-tools">
+              <div className="marker-display-toggle" aria-label="地图标记显示方式">
+                <button
+                  className={markerDisplay === "count" ? "active" : ""}
+                  type="button"
+                  onClick={() => changeMarkerDisplay("count")}
+                >
+                  数量
+                </button>
+                <button
+                  className={markerDisplay === "thumbnail" ? "active" : ""}
+                  type="button"
+                  onClick={() => changeMarkerDisplay("thumbnail")}
+                >
+                  缩略图
+                </button>
               </div>
-              <div>
-                <span>可见聚合</span>
-                <strong>{numberFormatter.format(clusters.length)}</strong>
+              <div className="map-heading-stats">
+                <div>
+                  <span>当前筛选</span>
+                  <strong>{numberFormatter.format(overview?.total ?? 0)}</strong>
+                </div>
+                <div>
+                  <span>可见聚合</span>
+                  <strong>{numberFormatter.format(clusters.length)}</strong>
+                </div>
               </div>
             </div>
           </header>
@@ -965,7 +1066,7 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
               const diameter = Math.min(62, 24 + Math.log2(cluster.total + 1) * 5);
               return (
                 <button
-                  className={`map-marker ${
+                  className={`map-marker ${markerDisplay === "thumbnail" ? "thumbnail" : ""} ${
                     selectedCluster?.cellX === cluster.cellX &&
                     selectedCluster?.cellY === cluster.cellY
                       ? "active"
@@ -990,7 +1091,16 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
                     });
                   }}
                 >
-                  {cluster.total > 1 ? numberFormatter.format(cluster.total) : "•"}
+                  {markerDisplay === "thumbnail" && cluster.thumbnailPath ? (
+                    <>
+                      <img src={convertFileSrc(cluster.thumbnailPath)} alt="" />
+                      <span>{numberFormatter.format(cluster.total)}</span>
+                    </>
+                  ) : cluster.total > 1 ? (
+                    numberFormatter.format(cluster.total)
+                  ) : (
+                    "•"
+                  )}
                 </button>
               );
             })}
@@ -1096,7 +1206,12 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
             )}
           </div>
 
-          <section className="map-time-dock" aria-label="地图时间轴">
+          <section
+            className="map-time-dock"
+            aria-label="地图时间轴"
+            onWheel={handleTimelineWheel}
+            title="滚动鼠标滚轮切换月份"
+          >
             <div className="map-timeline-heading">
               <span className="section-label">TIME AXIS</span>
               <strong>{numberFormatter.format(totalLocated)} 个坐标</strong>
@@ -1124,13 +1239,6 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
                   <small>{numberFormatter.format(month.withLocation)}</small>
                 </button>
               ))}
-            </div>
-            <div className="offline-note">
-              <span>◎</span>
-              <div>
-                <strong>真实离线地图</strong>
-                <small>省 Z4 · 市 Z6 · 县 Z8</small>
-              </div>
             </div>
           </section>
         </div>

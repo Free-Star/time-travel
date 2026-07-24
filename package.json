@@ -1,7 +1,7 @@
 {
-  "name": "time-album",
+  "name": "timetravel",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.1-beta",
   "packageManager": "pnpm@10.28.1",
   "type": "module",
   "scripts": {
@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "desktop:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev.ps1",
+    "desktop:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1",
     "test:rust": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-rust.ps1"
   },
   "dependencies": {

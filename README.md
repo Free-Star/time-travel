@@ -1,48 +1,134 @@
-# 时空相册
+<div align="center">
+  <img src="src-tauri/icons/logo-source.png" width="128" alt="TimeTravel Logo">
+  <h1>TimeTravel</h1>
+  <p>从时间与地点重新浏览个人记忆的本地桌面相册。</p>
+  <p><strong>本地优先 · 媒体只读 · 离线地图</strong></p>
+</div>
 
-本地优先、媒体绝对只读的个人时间线与地图相册。
+> 当前版本：`0.0.1-beta`。目前主要面向 Windows 10/11。
 
-当前已实现：
+## 功能
 
-- Tauri 桌面应用与相册目录选择。
-- SQLite 媒体索引、EXIF 时间/GPS 读取。
-- 可取消的后台扫描与扫描进度。
-- 基于路径、大小和修改时间的增量扫描。
-- 照片缩略图与视频封面优先复用 Windows 系统缓存和内嵌预览，按可见区并行生成、逐张刷新并持久缓存。
-- 缩略图缓存状态、预览和一键清理。
-- 按年月聚合、按可见行读取的虚拟化时间线。
-- 照片与视频只读查看器、详情和前后导航。
-- 真实离线地图、中国省市县三级边界与中文地名、鼠标锚点缩放、底部月份时间轴和地点媒体抽屉。
+- 按年、月组织照片和视频的时间线。
+- 根据 EXIF GPS 在离线地图上展示拍摄地点。
+- 中国省、市、县三级行政边界和中文地名。
+- 地图缩放以鼠标位置为中心，底部时间轴支持滚轮切换月份。
+- 地图聚合点可切换“照片数量”或“缩略图”显示。
+- 递归扫描相册，不要求固定的文件夹结构。
+- 根据 EXIF、媒体元数据、文件名和目录推断拍摄时间。
+- 增量索引，只重新处理发生变化的文件。
+- 按可见区域实时生成缩略图，优先复用内嵌预览和 Windows Shell 缓存。
+- 照片与视频只读查看、前后导航和媒体详情。
 
-## 不可变安全规则
+## 媒体安全
 
-- 媒体只通过只读句柄打开。
-- 不修改内容、EXIF、文件时间、名称或目录位置。
-- 应用写入目标一旦解析到相册根目录内，后端立即拒绝。
-- 数据库、缓存和设置必须位于系统应用数据目录。
-- `viewTools` 自动从媒体扫描范围排除。
-- 视频只作为 FFmpeg 输入，生成结果写入应用缓存。
-- 地图不请求在线瓦片或地理服务，坐标不会离开本机。
+TimeTravel 的首要原则是不修改媒体原件。
 
-为规避 MSVC 在中文深路径下写入大型 PDB 的问题，Rust 的可再生构建缓存位于
-`E:\TimeAlbumBuild\time-album`；源码仍全部位于本目录。
+- 不修改文件内容、EXIF、文件时间、名称或目录位置。
+- 媒体文件只通过只读方式打开。
+- 数据库、设置和缩略图缓存保存在相册目录之外。
+- 后端发现写入目标位于相册根目录内时会立即拒绝。
+- 扫描和缩略图测试会校验源文件没有发生变化。
+- 地图数据完全离线，照片坐标不会发送到网络服务。
 
-## 开发
+## 技术栈
+
+| 层级 | 实现 |
+| --- | --- |
+| 桌面应用 | Tauri 2、Windows WebView2 |
+| 前端 | React 19、TypeScript、Vite 7、原生 CSS |
+| 后端 | Rust |
+| 本地索引 | SQLite、rusqlite |
+| 媒体元数据 | kamadak-exif、Rust image、Windows Shell、FFmpeg 备用方案 |
+| 地图 | Natural Earth、ChinaGeoJson、TopoJSON/GeoJSON |
+| 安装包 | NSIS |
+
+## 实现结构
+
+```text
+只读媒体目录
+    │
+    ├── Rust 递归扫描、EXIF/GPS 和日期识别
+    │
+    ├── SQLite 增量索引
+    │
+    └── 系统预览 / 内嵌预览 / 解码生成缩略图
+            │
+            ▼
+      应用数据与缓存目录
+            │
+            ▼
+    React 时间线与离线地图
+```
+
+时间线采用按月聚合和窗口化读取，不会一次将全部媒体加载到内存。地图聚合由 SQLite 根据当前视野、缩放级别和月份计算；县级地图数据仅在需要时加载。
+
+## 开发环境
+
+需要：
+
+- Windows 10/11
+- Node.js（包含 Corepack）
+- Rust stable
+- Visual Studio Build Tools，安装“使用 C++ 的桌面开发”
+- WebView2 Runtime
+
+启动开发模式：
 
 ```powershell
 .\start.cmd
 ```
 
-`start.cmd` 会通过 Node 自带的 Corepack 调用项目指定的 pnpm，不要求全局安装 pnpm。
+`start.cmd` 会通过 Corepack 使用项目指定的 pnpm，不要求全局安装 pnpm。
 
 前端检查：
 
 ```powershell
-pnpm build
+corepack pnpm build
 ```
 
-后端检查：
+Rust 测试：
 
 ```powershell
-pnpm test:rust
+corepack pnpm test:rust
 ```
+
+当前测试包含扫描只读安全、缩略图源文件保护、时间线查询、地图聚合和日期识别。
+
+## 打包
+
+```powershell
+.\package.cmd
+```
+
+安装包默认输出到：
+
+```text
+E:\TimeAlbumBuild\time-album\release\bundle\nsis\
+```
+
+项目将 Rust 构建缓存放在较短的独立路径，以规避 Windows 中文深路径和大型构建文件可能引发的问题。源码仍保留在项目目录。
+
+## 目录
+
+```text
+src/                    React 前端
+src/assets/map/         离线地图数据
+src-tauri/src/          Rust 后端
+src-tauri/icons/        应用图标
+scripts/                开发、测试与打包脚本
+docs/                   开发计划
+```
+
+## 后续计划
+
+- 待完善媒体页面：缺少时间、定位和读取失败。
+- 用户时间与地点修正，只写入数据库。
+- 多级缩略图和缓存容量管理。
+- 数据库备份、恢复和版本迁移。
+- 年份快速跳转、地点搜索和快捷键。
+- 代码签名、自动更新和便携版。
+
+## 作者
+
+`freestar`
