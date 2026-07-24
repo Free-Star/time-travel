@@ -1,78 +1,14 @@
 .map-shell {
-  display: grid;
-  grid-template-columns: 188px minmax(0, 1fr);
   height: calc(100vh - 111px);
   min-height: 560px;
   background: #edeae2;
-}
-
-.map-time-rail {
-  display: flex;
-  min-height: 0;
-  flex-direction: column;
-  border-right: 1px solid #d5d2c9;
-  background: #e7e4dc;
-}
-
-.map-rail-heading {
-  display: grid;
-  gap: 6px;
-  padding: 21px 17px 15px;
-  border-bottom: 1px solid #d6d2c8;
-}
-
-.map-rail-heading strong {
-  color: #4c5449;
-  font-size: 13px;
-}
-
-.map-month-list {
-  min-height: 0;
-  overflow-y: auto;
-  padding: 8px;
-  scrollbar-color: #bdb7aa transparent;
-  scrollbar-width: thin;
-}
-
-.map-month-list button {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  justify-content: space-between;
-  padding: 9px 10px;
-  border: 0;
-  border-radius: 7px;
-  color: #707169;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-
-.map-month-list button:hover {
-  background: rgba(255, 255, 255, 0.44);
-}
-
-.map-month-list button.active {
-  color: #f8f5ec;
-  background: #3b453a;
-}
-
-.map-month-list span {
-  font-size: 11px;
-}
-
-.map-month-list small {
-  color: inherit;
-  font-size: 9px;
-  opacity: 0.65;
 }
 
 .offline-note {
   display: flex;
   align-items: center;
   gap: 9px;
-  margin: 8px;
-  padding: 11px;
+  padding: 8px 10px;
   border: 1px solid #cbd2c6;
   border-radius: 8px;
   color: #596957;
@@ -80,7 +16,7 @@
 }
 
 .offline-note > span {
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .offline-note strong,
@@ -100,10 +36,11 @@
 
 .map-stage {
   display: grid;
+  height: 100%;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr);
-  padding: 0 27px 25px;
+  grid-template-rows: auto minmax(0, 1fr) 86px;
+  padding: 0 27px 14px;
 }
 
 .map-heading {
@@ -112,6 +49,146 @@
   align-items: center;
   justify-content: space-between;
   gap: 20px;
+}
+
+.map-time-dock {
+  display: grid;
+  min-width: 0;
+  align-items: center;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+  padding-top: 10px;
+}
+
+.map-timeline-heading {
+  display: grid;
+  min-width: 98px;
+  gap: 3px;
+}
+
+.map-timeline-heading strong {
+  color: #4c5449;
+  font-size: 11px;
+}
+
+.timeline-all {
+  display: grid;
+  min-width: 62px;
+  height: 48px;
+  align-content: center;
+  gap: 2px;
+  padding: 0 10px;
+  border: 1px solid #cac7bd;
+  border-radius: 8px;
+  color: #676b64;
+  background: #f4f1e9;
+  cursor: pointer;
+}
+
+.timeline-all span,
+.timeline-all small {
+  display: block;
+}
+
+.timeline-all span {
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.timeline-all small {
+  color: #99968d;
+  font-size: 8px;
+}
+
+.timeline-all.active {
+  border-color: #3f4c3e;
+  color: #fffdf7;
+  background: #3f4c3e;
+}
+
+.timeline-all.active small {
+  color: rgba(255, 255, 255, 0.66);
+}
+
+.map-month-track {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  height: 60px;
+  align-items: stretch;
+  overflow-x: auto;
+  padding: 0 16px 2px;
+  scrollbar-color: #bcb7aa transparent;
+  scrollbar-width: thin;
+  scroll-snap-type: x proximity;
+}
+
+.map-month-track::before {
+  position: absolute;
+  top: 19px;
+  right: 16px;
+  left: 16px;
+  height: 1px;
+  background: #b8b7ad;
+  content: "";
+}
+
+.map-month-track button {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  min-width: 78px;
+  align-content: start;
+  justify-items: center;
+  gap: 2px;
+  padding: 10px 5px 3px;
+  border: 0;
+  color: #767970;
+  background: transparent;
+  cursor: pointer;
+  scroll-snap-align: center;
+}
+
+.map-month-track button i {
+  display: block;
+  width: 9px;
+  height: 9px;
+  margin-bottom: 3px;
+  border: 2px solid #ece9e1;
+  border-radius: 50%;
+  background: #858b81;
+  box-shadow: 0 0 0 1px #858b81;
+}
+
+.map-month-track button span {
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.map-month-track button small {
+  color: #a09d94;
+  font-size: 8px;
+}
+
+.map-month-track button:hover {
+  color: #3f4b3e;
+}
+
+.map-month-track button.active {
+  color: #394638;
+  font-weight: 700;
+}
+
+.map-month-track button.active i {
+  width: 13px;
+  height: 13px;
+  margin-top: -2px;
+  margin-bottom: 1px;
+  border-color: #f1eee6;
+  background: #8b5946;
+  box-shadow:
+    0 0 0 2px #8b5946,
+    0 3px 8px rgba(91, 63, 50, 0.22);
 }
 
 .map-heading h2 {
@@ -475,12 +552,26 @@
 }
 
 @media (max-width: 1100px) {
-  .map-shell {
-    grid-template-columns: 165px minmax(0, 1fr);
-  }
-
   .map-stage {
     padding-right: 19px;
     padding-left: 19px;
+  }
+
+  .map-timeline-heading {
+    display: none;
+  }
+
+  .map-time-dock {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+}
+
+@media (max-width: 850px) {
+  .map-time-dock .offline-note {
+    display: none;
+  }
+
+  .map-time-dock {
+    grid-template-columns: auto minmax(0, 1fr);
   }
 }

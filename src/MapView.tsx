@@ -243,6 +243,7 @@ function fitZoom(overview: MapOverview, width: number, height: number) {
 
 export default function MapView({ totalLocated, onError }: MapViewProps) {
   const mapRef = useRef<HTMLDivElement>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
   const clusterRequest = useRef(0);
   const countyRequests = useRef(new Set<string>());
   const dragState = useRef<{
@@ -273,6 +274,7 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
   const [viewer, setViewer] = useState<TimelineItem | null>(null);
   const [failedImages, setFailedImages] = useState<Set<number>>(() => new Set());
   const [generating, setGenerating] = useState(false);
+  const displayMonths = useMemo(() => [...months].reverse(), [months]);
 
   useEffect(() => {
     invoke<TimelineMonth[]>("timeline_months")
@@ -332,17 +334,6 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
   }, []);
 
   useEffect(() => {
-    const element = mapRef.current;
-    if (!element) return;
-    const handleWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      changeZoom(zoom + (event.deltaY < 0 ? 1 : -1));
-    };
-    element.addEventListener("wheel", handleWheel, { passive: false });
-    return () => element.removeEventListener("wheel", handleWheel);
-  }, [zoom]);
-
-  useEffect(() => {
     let active = true;
     setLoading(true);
     setSelectedCluster(null);
@@ -367,6 +358,22 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
     () => project(center.longitude, center.latitude, zoom),
     [center, zoom],
   );
+
+  useEffect(() => {
+    const element = mapRef.current;
+    if (!element) return;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rectangle = element.getBoundingClientRect();
+      changeZoomAt(
+        zoom + (event.deltaY < 0 ? 1 : -1),
+        event.clientX - rectangle.left,
+        event.clientY - rectangle.top,
+      );
+    };
+    element.addEventListener("wheel", handleWheel, { passive: false });
+    return () => element.removeEventListener("wheel", handleWheel);
+  }, [centerWorld, viewport, zoom]);
   const bounds = useMemo(() => {
     const northWest = unproject(
       Math.max(0, centerWorld.x - viewport.width / 2),
@@ -569,10 +576,48 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
     return lines;
   }, [bounds.north, bounds.south, gridStep]);
 
-  function changeZoom(nextZoom: number) {
-    setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom)));
+  useEffect(() => {
+    if (!selectedMonth) return;
+    const selected = timelineRef.current?.querySelector<HTMLElement>(
+      `[data-month="${selectedMonth}"]`,
+    );
+    selected?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+      inline: "center",
+    });
+  }, [selectedMonth]);
+
+  function changeZoomAt(
+    nextZoom: number,
+    screenX = viewport.width / 2,
+    screenY = viewport.height / 2,
+  ) {
+    const normalizedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom));
+    if (normalizedZoom === zoom) return;
+    const anchor = unproject(
+      centerWorld.x + screenX - viewport.width / 2,
+      centerWorld.y + screenY - viewport.height / 2,
+      zoom,
+    );
+    const nextAnchorWorld = project(anchor.longitude, anchor.latitude, normalizedZoom);
+    const size = worldSize(normalizedZoom);
+    const nextCenterX = Math.max(
+      0,
+      Math.min(size, nextAnchorWorld.x - screenX + viewport.width / 2),
+    );
+    const nextCenterY = Math.max(
+      0,
+      Math.min(size, nextAnchorWorld.y - screenY + viewport.height / 2),
+    );
+    setCenter(unproject(nextCenterX, nextCenterY, normalizedZoom));
+    setZoom(normalizedZoom);
     setSelectedCluster(null);
     setClusterWindow(null);
+  }
+
+  function changeZoom(nextZoom: number) {
+    changeZoomAt(nextZoom);
   }
 
   function selectMonth(month: string | null) {
@@ -679,41 +724,6 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
   return (
     <>
       <section className="map-shell">
-        <aside className="map-time-rail" aria-label="地图时间筛选">
-          <div className="map-rail-heading">
-            <span className="section-label">TIME FILTER</span>
-            <strong>{numberFormatter.format(totalLocated)} 个坐标</strong>
-          </div>
-          <div className="map-month-list">
-            <button
-              className={selectedMonth == null ? "active" : ""}
-              type="button"
-              onClick={() => selectMonth(null)}
-            >
-              <span>全部时间</span>
-              <small>{numberFormatter.format(totalLocated)}</small>
-            </button>
-            {months.map((month) => (
-              <button
-                className={selectedMonth === month.key ? "active" : ""}
-                key={month.key}
-                type="button"
-                onClick={() => selectMonth(month.key)}
-              >
-                <span>{formatMonth(month.key)}</span>
-                <small>{numberFormatter.format(month.withLocation)}</small>
-              </button>
-            ))}
-          </div>
-          <div className="offline-note">
-            <span>◎</span>
-            <div>
-              <strong>真实离线地图</strong>
-              <small>省 Z4 · 市 Z6 · 县 Z8</small>
-            </div>
-          </div>
-        </aside>
-
         <div className="map-stage">
           <header className="map-heading">
             <div>
@@ -896,11 +906,11 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={() => selectCluster(cluster)}
                   onDoubleClick={() => {
+                    changeZoom(zoom + 2);
                     setCenter({
                       longitude: cluster.longitude,
                       latitude: cluster.latitude,
                     });
-                    changeZoom(zoom + 2);
                   }}
                 >
                   {cluster.total > 1 ? numberFormatter.format(cluster.total) : "•"}
@@ -1008,6 +1018,44 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
               </section>
             )}
           </div>
+
+          <section className="map-time-dock" aria-label="地图时间轴">
+            <div className="map-timeline-heading">
+              <span className="section-label">TIME AXIS</span>
+              <strong>{numberFormatter.format(totalLocated)} 个坐标</strong>
+            </div>
+            <button
+              className={`timeline-all ${selectedMonth == null ? "active" : ""}`}
+              type="button"
+              onClick={() => selectMonth(null)}
+            >
+              <span>全部</span>
+              <small>{numberFormatter.format(totalLocated)}</small>
+            </button>
+            <div className="map-month-track" ref={timelineRef}>
+              {displayMonths.map((month) => (
+                <button
+                  className={selectedMonth === month.key ? "active" : ""}
+                  data-month={month.key}
+                  key={month.key}
+                  type="button"
+                  title={`${formatMonth(month.key)} · ${month.withLocation} 个坐标`}
+                  onClick={() => selectMonth(month.key)}
+                >
+                  <i />
+                  <span>{formatMonth(month.key)}</span>
+                  <small>{numberFormatter.format(month.withLocation)}</small>
+                </button>
+              ))}
+            </div>
+            <div className="offline-note">
+              <span>◎</span>
+              <div>
+                <strong>真实离线地图</strong>
+                <small>省 Z4 · 市 Z6 · 县 Z8</small>
+              </div>
+            </div>
+          </section>
         </div>
       </section>
 
