@@ -2,13 +2,14 @@ use std::{
     collections::hash_map::DefaultHasher,
     env, fs,
     hash::{Hash, Hasher},
-    io::BufReader,
+    io::{BufReader, Read},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
+    thread,
 };
 
 use chrono::Local;
@@ -91,6 +92,7 @@ pub struct ThumbnailResult {
     pub media_id: i64,
     pub status: String,
     pub cache_path: Option<String>,
+    pub generator: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -102,6 +104,21 @@ pub struct ThumbnailReport {
     pub failed: usize,
     pub thumbnail_status: ThumbnailStatus,
     pub previews: Vec<ThumbnailPreview>,
+}
+
+#[derive(Debug)]
+struct GeneratedThumbnail {
+    width: u32,
+    height: u32,
+    bytes: i64,
+    generator: &'static str,
+}
+
+#[derive(Debug)]
+struct CompletedCandidate {
+    candidate: database::ThumbnailCandidate,
+    output: PathBuf,
+    generated: Result<GeneratedThumbnail, String>,
 }
 
 pub fn generate(
@@ -150,6 +167,7 @@ pub fn generate_selected(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_core(
     app: Option<&AppHandle>,
     library_root: &Path,
@@ -175,87 +193,201 @@ fn generate_core(
         ..ThumbnailProgress::default()
     };
 
+    let mut photo_batches: Vec<Vec<database::ThumbnailCandidate>> =
+        (0..3).map(|_| Vec::new()).collect();
+    let mut video_batch = Vec::new();
+    let mut photo_index = 0usize;
     for candidate in candidates {
-        if cancel.load(Ordering::Relaxed) {
-            progress.status = "cancelled".to_string();
-            emit_progress(app, &progress);
-            return report_from_connection(&connection, &root, progress);
-        }
-
-        progress.current_path = candidate.path.clone();
-        let media_path = Path::new(&candidate.path);
-        let output_directory = cache.join(format!("{:02x}", candidate.media_id.rem_euclid(256)));
-        let output = output_directory.join(format!(
-            "{}-{}.jpg",
-            candidate.media_id, candidate.modified_ns
-        ));
-        safety::create_directory_outside_library(&output_directory, &root)?;
-
-        let generated = if candidate.media_kind == "photo" {
-            generate_image(media_path, &output, &root)
-        } else if let Some(ffmpeg) = ffmpeg.as_deref() {
-            generate_video(ffmpeg, media_path, &output, &root, cache)
+        if candidate.media_kind == "photo" {
+            let batch_index = photo_index % 3;
+            photo_batches[batch_index].push(candidate);
+            photo_index += 1;
         } else {
-            Err("未找到 FFmpeg，无法生成视频封面".to_string())
-        };
-
-        match generated {
-            Ok((width, height, bytes)) => {
-                database::record_thumbnail(
-                    &connection,
-                    candidate.media_id,
-                    candidate.modified_ns,
-                    Some(&output),
-                    Some(width),
-                    Some(height),
-                    bytes,
-                    "ready",
-                    None,
-                    &Local::now().to_rfc3339(),
-                )?;
-                progress.ready += 1;
-                emit_result(
-                    app,
-                    &ThumbnailResult {
-                        media_id: candidate.media_id,
-                        status: "ready".to_string(),
-                        cache_path: Some(output.to_string_lossy().to_string()),
-                    },
-                );
-            }
-            Err(error) => {
-                database::record_thumbnail(
-                    &connection,
-                    candidate.media_id,
-                    candidate.modified_ns,
-                    None,
-                    None,
-                    None,
-                    0,
-                    "failed",
-                    Some(&error),
-                    &Local::now().to_rfc3339(),
-                )?;
-                progress.failed += 1;
-                emit_result(
-                    app,
-                    &ThumbnailResult {
-                        media_id: candidate.media_id,
-                        status: "failed".to_string(),
-                        cache_path: None,
-                    },
-                );
-            }
+            video_batch.push(candidate);
         }
-
-        progress.processed += 1;
-        emit_progress(app, &progress);
     }
 
-    progress.status = "completed".to_string();
+    thread::scope(|scope| -> Result<(), String> {
+        let (sender, receiver) = mpsc::channel::<CompletedCandidate>();
+        for batch in photo_batches.into_iter().filter(|batch| !batch.is_empty()) {
+            let sender = sender.clone();
+            let root = root.as_path();
+            let ffmpeg = ffmpeg.as_deref();
+            scope.spawn(move || {
+                for candidate in batch {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let completed = process_candidate(candidate, root, cache, ffmpeg);
+                    if sender.send(completed).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        if !video_batch.is_empty() {
+            let sender = sender.clone();
+            let root = root.as_path();
+            let ffmpeg = ffmpeg.as_deref();
+            scope.spawn(move || {
+                for candidate in video_batch {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let completed = process_candidate(candidate, root, cache, ffmpeg);
+                    if sender.send(completed).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(sender);
+
+        for completed in receiver {
+            record_completed(&connection, app, &mut progress, completed)?;
+        }
+        Ok(())
+    })?;
+
+    progress.status = if cancel.load(Ordering::Relaxed) {
+        "cancelled".to_string()
+    } else {
+        "completed".to_string()
+    };
     progress.current_path.clear();
     emit_progress(app, &progress);
     report_from_connection(&connection, &root, progress)
+}
+
+fn process_candidate(
+    candidate: database::ThumbnailCandidate,
+    root: &Path,
+    cache: &Path,
+    ffmpeg: Option<&Path>,
+) -> CompletedCandidate {
+    let output_directory = cache.join(format!("{:02x}", candidate.media_id.rem_euclid(256)));
+    let output = output_directory.join(format!(
+        "{}-{}.jpg",
+        candidate.media_id, candidate.modified_ns
+    ));
+    let generated = safety::create_directory_outside_library(&output_directory, root)
+        .and_then(|_| generate_media_thumbnail(&candidate, &output, root, cache, ffmpeg));
+    CompletedCandidate {
+        candidate,
+        output,
+        generated,
+    }
+}
+
+fn record_completed(
+    connection: &rusqlite::Connection,
+    app: Option<&AppHandle>,
+    progress: &mut ThumbnailProgress,
+    completed: CompletedCandidate,
+) -> Result<(), String> {
+    progress.current_path = completed.candidate.path.clone();
+    match completed.generated {
+        Ok(generated) => {
+            database::record_thumbnail(
+                connection,
+                completed.candidate.media_id,
+                completed.candidate.modified_ns,
+                Some(&completed.output),
+                Some(generated.width),
+                Some(generated.height),
+                generated.bytes,
+                "ready",
+                None,
+                &Local::now().to_rfc3339(),
+            )?;
+            progress.ready += 1;
+            emit_result(
+                app,
+                &ThumbnailResult {
+                    media_id: completed.candidate.media_id,
+                    status: "ready".to_string(),
+                    cache_path: Some(completed.output.to_string_lossy().to_string()),
+                    generator: Some(generated.generator.to_string()),
+                },
+            );
+        }
+        Err(error) => {
+            database::record_thumbnail(
+                connection,
+                completed.candidate.media_id,
+                completed.candidate.modified_ns,
+                None,
+                None,
+                None,
+                0,
+                "failed",
+                Some(&error),
+                &Local::now().to_rfc3339(),
+            )?;
+            progress.failed += 1;
+            emit_result(
+                app,
+                &ThumbnailResult {
+                    media_id: completed.candidate.media_id,
+                    status: "failed".to_string(),
+                    cache_path: None,
+                    generator: None,
+                },
+            );
+        }
+    }
+    progress.processed += 1;
+    emit_progress(app, progress);
+    Ok(())
+}
+
+fn generate_media_thumbnail(
+    candidate: &database::ThumbnailCandidate,
+    output: &Path,
+    root: &Path,
+    cache: &Path,
+    ffmpeg: Option<&Path>,
+) -> Result<GeneratedThumbnail, String> {
+    let media_path = Path::new(&candidate.path);
+    drop(safety::open_media_readonly(media_path, root)?);
+
+    #[cfg(target_os = "windows")]
+    if let Ok(image) = crate::windows_thumbnail::load(media_path, THUMBNAIL_EDGE, true) {
+        return encode_thumbnail(image, output, root, "windows-cache");
+    }
+
+    if candidate.media_kind == "photo" {
+        if matches!(
+            media_path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("jpg" | "jpeg")
+        ) {
+            if let Ok(image) = load_embedded_jpeg_thumbnail(media_path, root) {
+                if image.width().max(image.height()) >= 240 {
+                    return encode_thumbnail(image, output, root, "embedded-jpeg");
+                }
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        if let Ok(image) = crate::windows_thumbnail::load(media_path, THUMBNAIL_EDGE, false) {
+            return encode_thumbnail(image, output, root, "windows-shell");
+        }
+
+        generate_image(media_path, output, root)
+    } else {
+        #[cfg(target_os = "windows")]
+        if let Ok(image) = crate::windows_thumbnail::load(media_path, THUMBNAIL_EDGE, false) {
+            return encode_thumbnail(image, output, root, "windows-shell");
+        }
+
+        ffmpeg
+            .ok_or_else(|| "未找到 FFmpeg，无法生成视频封面".to_string())
+            .and_then(|path| generate_video(path, media_path, output, root, cache))
+    }
 }
 
 pub fn status(app: &AppHandle, root: &Path) -> Result<ThumbnailStatus, String> {
@@ -323,7 +455,7 @@ fn generate_image(
     media_path: &Path,
     output: &Path,
     root: &Path,
-) -> Result<(u32, u32, i64), String> {
+) -> Result<GeneratedThumbnail, String> {
     let input = safety::open_media_readonly(media_path, root)?;
     let reader = ImageReader::new(BufReader::new(input))
         .with_guessed_format()
@@ -331,6 +463,15 @@ fn generate_image(
     let image = reader
         .decode()
         .map_err(|error| format!("无法解码图片：{error}"))?;
+    encode_thumbnail(image, output, root, "image-decoder")
+}
+
+fn encode_thumbnail(
+    image: image::DynamicImage,
+    output: &Path,
+    root: &Path,
+    generator: &'static str,
+) -> Result<GeneratedThumbnail, String> {
     let thumbnail = image.thumbnail(THUMBNAIL_EDGE, THUMBNAIL_EDGE);
     let width = thumbnail.width();
     let height = thumbnail.height();
@@ -342,7 +483,12 @@ fn generate_image(
         .metadata()
         .map(|metadata| i64::try_from(metadata.len()).unwrap_or(i64::MAX))
         .map_err(|error| format!("无法读取缩略图大小：{error}"))?;
-    Ok((width, height, bytes))
+    Ok(GeneratedThumbnail {
+        width,
+        height,
+        bytes,
+        generator,
+    })
 }
 
 fn generate_video(
@@ -351,7 +497,7 @@ fn generate_video(
     output: &Path,
     root: &Path,
     working_directory: &Path,
-) -> Result<(u32, u32, i64), String> {
+) -> Result<GeneratedThumbnail, String> {
     drop(safety::open_media_readonly(media_path, root)?);
     safety::ensure_write_outside_library(output, root)?;
 
@@ -393,7 +539,12 @@ fn generate_video(
                 .metadata()
                 .map(|metadata| i64::try_from(metadata.len()).unwrap_or(i64::MAX))
                 .map_err(|error| format!("无法读取视频封面大小：{error}"))?;
-            return Ok((width, height, bytes));
+            return Ok(GeneratedThumbnail {
+                width,
+                height,
+                bytes,
+                generator: "ffmpeg",
+            });
         }
         last_error = String::from_utf8_lossy(&result.stderr).trim().to_string();
     }
@@ -403,6 +554,135 @@ fn generate_video(
     } else {
         format!("FFmpeg 生成封面失败：{last_error}")
     })
+}
+
+fn load_embedded_jpeg_thumbnail(
+    media_path: &Path,
+    root: &Path,
+) -> Result<image::DynamicImage, String> {
+    let input = safety::open_media_readonly(media_path, root)?;
+    let jpeg = extract_embedded_jpeg(BufReader::new(input))?;
+    image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg)
+        .map_err(|error| format!("无法解码内嵌 JPEG 预览：{error}"))
+}
+
+fn extract_embedded_jpeg<R: Read>(mut reader: R) -> Result<Vec<u8>, String> {
+    let mut signature = [0u8; 2];
+    reader
+        .read_exact(&mut signature)
+        .map_err(|error| format!("无法读取 JPEG 文件头：{error}"))?;
+    if signature != [0xff, 0xd8] {
+        return Err("图片不是 JPEG 格式".to_string());
+    }
+
+    loop {
+        let mut marker_prefix = [0u8; 1];
+        reader
+            .read_exact(&mut marker_prefix)
+            .map_err(|error| format!("无法读取 JPEG 标记：{error}"))?;
+        while marker_prefix[0] != 0xff {
+            reader
+                .read_exact(&mut marker_prefix)
+                .map_err(|error| format!("无法定位 JPEG 标记：{error}"))?;
+        }
+        let mut marker = [0u8; 1];
+        reader
+            .read_exact(&mut marker)
+            .map_err(|error| format!("无法读取 JPEG 标记类型：{error}"))?;
+        while marker[0] == 0xff {
+            reader
+                .read_exact(&mut marker)
+                .map_err(|error| format!("无法读取 JPEG 填充标记：{error}"))?;
+        }
+        if matches!(marker[0], 0xd9 | 0xda) {
+            break;
+        }
+        if marker[0] == 0x01 || (0xd0..=0xd7).contains(&marker[0]) {
+            continue;
+        }
+
+        let mut length_bytes = [0u8; 2];
+        reader
+            .read_exact(&mut length_bytes)
+            .map_err(|error| format!("无法读取 JPEG 区段长度：{error}"))?;
+        let length = u16::from_be_bytes(length_bytes) as usize;
+        if length < 2 {
+            return Err("JPEG 区段长度无效".to_string());
+        }
+        let mut segment = vec![0u8; length - 2];
+        reader
+            .read_exact(&mut segment)
+            .map_err(|error| format!("无法读取 JPEG 区段：{error}"))?;
+        if marker[0] == 0xe1 && segment.starts_with(b"Exif\0\0") {
+            if let Some(thumbnail) = exif_jpeg_from_tiff(&segment[6..]) {
+                return Ok(thumbnail.to_vec());
+            }
+        }
+    }
+    Err("JPEG 不包含可用的内嵌预览".to_string())
+}
+
+fn exif_jpeg_from_tiff(tiff: &[u8]) -> Option<&[u8]> {
+    if tiff.len() < 8 {
+        return None;
+    }
+    let little_endian = match &tiff[0..2] {
+        b"II" => true,
+        b"MM" => false,
+        _ => return None,
+    };
+    let read_u16 = |offset: usize| -> Option<u16> {
+        let bytes: [u8; 2] = tiff.get(offset..offset + 2)?.try_into().ok()?;
+        Some(if little_endian {
+            u16::from_le_bytes(bytes)
+        } else {
+            u16::from_be_bytes(bytes)
+        })
+    };
+    let read_u32 = |offset: usize| -> Option<u32> {
+        let bytes: [u8; 4] = tiff.get(offset..offset + 4)?.try_into().ok()?;
+        Some(if little_endian {
+            u32::from_le_bytes(bytes)
+        } else {
+            u32::from_be_bytes(bytes)
+        })
+    };
+    if read_u16(2)? != 42 {
+        return None;
+    }
+
+    let ifd0 = read_u32(4)? as usize;
+    let ifd0_entries = read_u16(ifd0)? as usize;
+    let ifd1_pointer = ifd0
+        .checked_add(2)?
+        .checked_add(ifd0_entries.checked_mul(12)?)?;
+    let ifd1 = read_u32(ifd1_pointer)? as usize;
+    if ifd1 == 0 {
+        return None;
+    }
+
+    let entries = read_u16(ifd1)? as usize;
+    let mut jpeg_offset = None;
+    let mut jpeg_length = None;
+    for index in 0..entries {
+        let entry = ifd1.checked_add(2)?.checked_add(index.checked_mul(12)?)?;
+        let tag = read_u16(entry)?;
+        let field_type = read_u16(entry + 2)?;
+        let count = read_u32(entry + 4)?;
+        if field_type != 4 || count != 1 {
+            continue;
+        }
+        match tag {
+            0x0201 => jpeg_offset = Some(read_u32(entry + 8)? as usize),
+            0x0202 => jpeg_length = Some(read_u32(entry + 8)? as usize),
+            _ => {}
+        }
+    }
+
+    let start = jpeg_offset?;
+    let end = start.checked_add(jpeg_length?)?;
+    let jpeg = tiff.get(start..end)?;
+    jpeg.starts_with(&[0xff, 0xd8]).then_some(jpeg)
 }
 
 fn find_ffmpeg() -> Option<PathBuf> {
@@ -507,6 +787,30 @@ mod tests {
     }
 
     #[test]
+    fn reads_embedded_jpeg_from_exif_ifd() {
+        let thumbnail = [0xff, 0xd8, 0xff, 0xd9];
+        let mut tiff = Vec::new();
+        tiff.extend_from_slice(b"II");
+        tiff.extend_from_slice(&42u16.to_le_bytes());
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&0u16.to_le_bytes());
+        tiff.extend_from_slice(&14u32.to_le_bytes());
+        tiff.extend_from_slice(&2u16.to_le_bytes());
+        tiff.extend_from_slice(&0x0201u16.to_le_bytes());
+        tiff.extend_from_slice(&4u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&44u32.to_le_bytes());
+        tiff.extend_from_slice(&0x0202u16.to_le_bytes());
+        tiff.extend_from_slice(&4u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&(thumbnail.len() as u32).to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(&thumbnail);
+
+        assert_eq!(exif_jpeg_from_tiff(&tiff), Some(thumbnail.as_slice()));
+    }
+
+    #[test]
     fn image_thumbnail_does_not_modify_source() {
         let (base, library, cache) = test_paths("image");
         let source = library.join("source.png");
@@ -521,10 +825,10 @@ mod tests {
             .modified()
             .expect("source modified time before");
 
-        let (width, height, bytes) =
+        let generated =
             generate_image(&source, &output, &library).expect("generate image thumbnail");
-        assert_eq!((width, height), (512, 341));
-        assert!(bytes > 0);
+        assert_eq!((generated.width, generated.height), (512, 341));
+        assert!(generated.bytes > 0);
         assert_eq!(fs::read(&source).expect("read source after"), before_bytes);
         assert_eq!(
             fs::metadata(&source)
@@ -569,10 +873,10 @@ mod tests {
             .modified()
             .expect("video modified time before");
 
-        let (width, height, bytes) = generate_video(&ffmpeg, &source, &output, &library, &cache)
+        let generated = generate_video(&ffmpeg, &source, &output, &library, &cache)
             .expect("generate video cover");
-        assert_eq!((width, height), (512, 288));
-        assert!(bytes > 0);
+        assert_eq!((generated.width, generated.height), (512, 288));
+        assert!(generated.bytes > 0);
         assert_eq!(fs::read(&source).expect("read video after"), before_bytes);
         assert_eq!(
             fs::metadata(&source)

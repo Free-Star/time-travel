@@ -4,6 +4,8 @@ mod metadata;
 mod safety;
 mod scanner;
 mod thumbnails;
+#[cfg(target_os = "windows")]
+mod windows_thumbnail;
 
 use database::IndexSummary;
 use library::{AppState, LibrarySummary};
