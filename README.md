@@ -23,9 +23,10 @@
 ## 开发
 
 ```powershell
-pnpm install
-pnpm desktop:dev
+.\start.cmd
 ```
+
+`start.cmd` 会通过 Node 自带的 Corepack 调用项目指定的 pnpm，不要求全局安装 pnpm。
 
 前端检查：
 
