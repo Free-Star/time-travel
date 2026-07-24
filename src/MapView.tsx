@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { feature as topologyFeature } from "topojson-client";
 import MediaViewer from "./MediaViewer";
 import type { TimelineItem } from "./media";
 import { dateFromArchive } from "./media";
@@ -54,6 +55,41 @@ type MapViewProps = {
 
 type Point = { x: number; y: number };
 type Center = { longitude: number; latitude: number };
+type Position = [number, number];
+type GeoJsonGeometry =
+  | { type: "Polygon"; coordinates: Position[][] }
+  | { type: "MultiPolygon"; coordinates: Position[][][] };
+type GeoJsonFeatureCollection = {
+  features: Array<{
+    geometry: GeoJsonGeometry;
+    properties?: Record<string, string>;
+  }>;
+};
+type CountryPolygon = {
+  key: string;
+  rings: Position[][];
+  west: number;
+  east: number;
+  south: number;
+  north: number;
+};
+type AdminRegion = {
+  key: string;
+  name: string;
+  code: string;
+  polygons: Position[][][];
+  label: Position;
+  west: number;
+  east: number;
+  south: number;
+  north: number;
+};
+type ChinaTopology = {
+  objects: {
+    provinces: unknown;
+    prefectures: unknown;
+  };
+};
 
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 16;
@@ -68,41 +104,84 @@ const shortDateFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "short",
   day: "numeric",
 });
+const COUNTY_DATA_MODULES = import.meta.glob<{
+  default: GeoJsonFeatureCollection;
+}>("./assets/map/china-counties/*.json");
 
-// A deliberately low-detail, bundled geographic silhouette. It provides
-// orientation without making any network request for tiles or location data.
-const LANDMASSES: Array<Array<[number, number]>> = [
-  [
-    [-168, 70], [-150, 60], [-140, 58], [-130, 50], [-124, 40], [-117, 32],
-    [-105, 24], [-95, 19], [-84, 22], [-80, 30], [-75, 39], [-65, 45],
-    [-58, 52], [-64, 60], [-82, 68], [-105, 73], [-135, 72], [-168, 70],
-  ],
-  [
-    [-82, 12], [-72, 10], [-62, 5], [-50, -3], [-42, -15], [-50, -28],
-    [-57, -38], [-67, -52], [-74, -40], [-79, -20], [-82, 0], [-82, 12],
-  ],
-  [
-    [-10, 36], [0, 44], [15, 48], [30, 46], [40, 40], [50, 44], [65, 52],
-    [85, 55], [105, 52], [125, 48], [145, 58], [165, 60], [178, 52],
-    [160, 42], [142, 36], [126, 30], [112, 20], [100, 8], [84, 8],
-    [72, 20], [58, 26], [44, 30], [34, 34], [25, 38], [15, 36], [5, 35],
-    [-10, 36],
-  ],
-  [
-    [-17, 35], [2, 37], [18, 33], [32, 25], [42, 12], [48, -2],
-    [40, -18], [30, -32], [18, -35], [7, -28], [-2, -10], [-10, 8],
-    [-17, 22], [-17, 35],
-  ],
-  [
-    [112, -11], [130, -12], [145, -20], [153, -30], [146, -40],
-    [132, -43], [117, -34], [112, -22], [112, -11],
-  ],
-  [
-    [-52, 60], [-42, 72], [-26, 80], [-18, 72], [-30, 62], [-52, 60],
-  ],
-  [[130, 32], [136, 35], [142, 44], [146, 42], [141, 34], [130, 32]],
-  [[47, -13], [50, -17], [48, -25], [44, -20], [47, -13]],
-];
+// Natural Earth 1:110m country boundaries, bundled with the application.
+// The map is parsed locally and never makes a runtime network request.
+function countryPolygonsFromGeoJson(source: GeoJsonFeatureCollection) {
+  return source.features.flatMap<CountryPolygon>((feature, featureIndex) => {
+    const polygons =
+      feature.geometry.type === "Polygon"
+        ? [feature.geometry.coordinates]
+        : feature.geometry.coordinates;
+    return polygons.map((rings, polygonIndex) => {
+      const points = rings.flat();
+      const longitudes = points.map(([longitude]) => longitude);
+      const latitudes = points.map(([, latitude]) => latitude);
+      return {
+        key: `${featureIndex}-${polygonIndex}`,
+        rings,
+        west: Math.min(...longitudes),
+        east: Math.max(...longitudes),
+        south: Math.min(...latitudes),
+        north: Math.max(...latitudes),
+      };
+    });
+  });
+}
+
+function geometryPolygons(geometry: GeoJsonGeometry) {
+  return geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+}
+
+function ringCentroid(ring: Position[]): { point: Position; area: number } {
+  let area = 0;
+  let longitude = 0;
+  let latitude = 0;
+  for (let index = 0; index < ring.length - 1; index += 1) {
+    const [x1, y1] = ring[index];
+    const [x2, y2] = ring[index + 1];
+    const cross = x1 * y2 - x2 * y1;
+    area += cross;
+    longitude += (x1 + x2) * cross;
+    latitude += (y1 + y2) * cross;
+  }
+  area /= 2;
+  if (Math.abs(area) < 1e-8) {
+    const point = ring[Math.floor(ring.length / 2)] ?? [0, 0];
+    return { point, area: 0 };
+  }
+  return {
+    point: [longitude / (6 * area), latitude / (6 * area)],
+    area: Math.abs(area),
+  };
+}
+
+function adminRegionsFromGeoJson(source: GeoJsonFeatureCollection) {
+  return source.features.map<AdminRegion>((feature, featureIndex) => {
+    const polygons = geometryPolygons(feature.geometry);
+    const points = polygons.flat(2);
+    const longitudes = points.map(([longitude]) => longitude);
+    const latitudes = points.map(([, latitude]) => latitude);
+    const label = polygons
+      .map((polygon) => ringCentroid(polygon[0]))
+      .sort((left, right) => right.area - left.area)[0]?.point ?? [0, 0];
+    const properties = feature.properties ?? {};
+    return {
+      key: properties.code ?? properties.id ?? String(featureIndex),
+      name: properties["地名"] ?? properties.name ?? "未命名区域",
+      code: properties["区划码"] ?? properties.code ?? properties.id ?? "",
+      polygons,
+      label,
+      west: Math.min(...longitudes),
+      east: Math.max(...longitudes),
+      south: Math.min(...latitudes),
+      north: Math.max(...latitudes),
+    };
+  });
+}
 
 function worldSize(zoom: number) {
   return TILE_SIZE * 2 ** zoom;
@@ -165,6 +244,7 @@ function fitZoom(overview: MapOverview, width: number, height: number) {
 export default function MapView({ totalLocated, onError }: MapViewProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const clusterRequest = useRef(0);
+  const countyRequests = useRef(new Set<string>());
   const dragState = useRef<{
     pointerId: number;
     startX: number;
@@ -179,6 +259,13 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
   const [zoom, setZoom] = useState(3);
   const [viewport, setViewport] = useState({ width: 800, height: 600 });
   const [loading, setLoading] = useState(true);
+  const [mapDataLoading, setMapDataLoading] = useState(true);
+  const [countryPolygons, setCountryPolygons] = useState<CountryPolygon[]>([]);
+  const [provinceRegions, setProvinceRegions] = useState<AdminRegion[]>([]);
+  const [cityRegions, setCityRegions] = useState<AdminRegion[]>([]);
+  const [countyRegionsByProvince, setCountyRegionsByProvince] = useState<
+    Record<string, AdminRegion[]>
+  >({});
   const [dragging, setDragging] = useState(false);
   const [selectedCluster, setSelectedCluster] = useState<MapCluster | null>(null);
   const [clusterWindow, setClusterWindow] = useState<MapClusterWindow | null>(null);
@@ -191,6 +278,43 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
     invoke<TimelineMonth[]>("timeline_months")
       .then((result) => setMonths(result.filter((month) => month.withLocation > 0)))
       .catch((reason) => onError(String(reason)));
+  }, [onError]);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      import("./assets/map/ne_110m_admin_0_countries.json"),
+      import("./assets/map/china-admin-2023.json"),
+    ])
+      .then(([worldModule, chinaModule]) => {
+        const topology = chinaModule.default as unknown as ChinaTopology;
+        const convertTopology = topologyFeature as unknown as (
+          source: ChinaTopology,
+          object: unknown,
+        ) => GeoJsonFeatureCollection;
+        if (active) {
+          setCountryPolygons(
+            countryPolygonsFromGeoJson(
+              worldModule.default as unknown as GeoJsonFeatureCollection,
+            ),
+          );
+          setProvinceRegions(
+            adminRegionsFromGeoJson(
+              convertTopology(topology, topology.objects.provinces),
+            ),
+          );
+          setCityRegions(
+            adminRegionsFromGeoJson(
+              convertTopology(topology, topology.objects.prefectures),
+            ),
+          );
+        }
+      })
+      .catch((reason) => onError(`无法读取离线地图数据：${String(reason)}`))
+      .finally(() => active && setMapDataLoading(false));
+    return () => {
+      active = false;
+    };
   }, [onError]);
 
   useLayoutEffect(() => {
@@ -206,6 +330,17 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    const element = mapRef.current;
+    if (!element) return;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      changeZoom(zoom + (event.deltaY < 0 ? 1 : -1));
+    };
+    element.addEventListener("wheel", handleWheel, { passive: false });
+    return () => element.removeEventListener("wheel", handleWheel);
+  }, [zoom]);
 
   useEffect(() => {
     let active = true;
@@ -252,6 +387,46 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
   }, [centerWorld, viewport, zoom]);
 
   useEffect(() => {
+    if (zoom < 8 || cityRegions.length === 0) return;
+    const provinceCodes = new Set(
+      cityRegions
+        .filter(
+          (region) =>
+            region.east >= bounds.west &&
+            region.west <= bounds.east &&
+            region.north >= bounds.south &&
+            region.south <= bounds.north,
+        )
+        .map((region) => `${region.code.slice(0, 2)}0000`),
+    );
+    for (const provinceCode of provinceCodes) {
+      if (
+        countyRegionsByProvince[provinceCode] ||
+        countyRequests.current.has(provinceCode)
+      ) {
+        continue;
+      }
+      const loader =
+        COUNTY_DATA_MODULES[
+          `./assets/map/china-counties/${provinceCode}.json`
+        ];
+      if (!loader) continue;
+      countyRequests.current.add(provinceCode);
+      loader()
+        .then((module) => {
+          setCountyRegionsByProvince((current) => ({
+            ...current,
+            [provinceCode]: adminRegionsFromGeoJson(module.default),
+          }));
+        })
+        .catch((reason) =>
+          onError(`无法读取${provinceCode}县级地图：${String(reason)}`),
+        )
+        .finally(() => countyRequests.current.delete(provinceCode));
+    }
+  }, [bounds, cityRegions, countyRegionsByProvince, onError, zoom]);
+
+  useEffect(() => {
     if (!overview?.total) {
       setClusters([]);
       return;
@@ -292,20 +467,89 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
     [centerWorld, clusters, viewport, zoom],
   );
 
-  const landPaths = useMemo(
-    () =>
-      LANDMASSES.map((polygon) =>
-        polygon
-          .map(([longitude, latitude], index) => {
-            const point = project(longitude, latitude, zoom);
-            const x = point.x - centerWorld.x + viewport.width / 2;
-            const y = point.y - centerWorld.y + viewport.height / 2;
-            return `${index ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
-          })
-          .join(" "),
-      ),
-    [centerWorld, viewport, zoom],
-  );
+  const countryPaths = useMemo(() => {
+    const longitudePadding = Math.max(2, (bounds.east - bounds.west) * 0.08);
+    const latitudePadding = Math.max(2, (bounds.north - bounds.south) * 0.08);
+    return countryPolygons.filter(
+      (polygon) =>
+        polygon.east >= bounds.west - longitudePadding &&
+        polygon.west <= bounds.east + longitudePadding &&
+        polygon.north >= bounds.south - latitudePadding &&
+        polygon.south <= bounds.north + latitudePadding,
+    ).map((polygon) => ({
+      key: polygon.key,
+      path: polygon.rings
+        .map(
+          (ring) =>
+            `${ring
+              .map(([longitude, latitude], index) => {
+                const point = project(longitude, latitude, zoom);
+                const x = point.x - centerWorld.x + viewport.width / 2;
+                const y = point.y - centerWorld.y + viewport.height / 2;
+                return `${index ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
+              })
+              .join(" ")} Z`,
+        )
+        .join(" "),
+    }));
+  }, [bounds, centerWorld, countryPolygons, viewport, zoom]);
+
+  const administrativeLayers = useMemo(() => {
+    const longitudePadding = Math.max(0.5, (bounds.east - bounds.west) * 0.04);
+    const latitudePadding = Math.max(0.5, (bounds.north - bounds.south) * 0.04);
+    const renderRegions = (regions: AdminRegion[]) =>
+      regions
+        .filter(
+          (region) =>
+            region.east >= bounds.west - longitudePadding &&
+            region.west <= bounds.east + longitudePadding &&
+            region.north >= bounds.south - latitudePadding &&
+            region.south <= bounds.north + latitudePadding,
+        )
+        .map((region) => {
+          const labelPoint = project(region.label[0], region.label[1], zoom);
+          return {
+            key: region.key,
+            name: region.name,
+            code: region.code,
+            labelX: labelPoint.x - centerWorld.x + viewport.width / 2,
+            labelY: labelPoint.y - centerWorld.y + viewport.height / 2,
+            path: region.polygons
+              .map((polygon) =>
+                polygon
+                  .map(
+                    (ring) =>
+                      `${ring
+                        .map(([longitude, latitude], index) => {
+                          const point = project(longitude, latitude, zoom);
+                          const x = point.x - centerWorld.x + viewport.width / 2;
+                          const y = point.y - centerWorld.y + viewport.height / 2;
+                          return `${index ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`;
+                        })
+                        .join(" ")} Z`,
+                  )
+                  .join(" "),
+              )
+              .join(" "),
+          };
+        });
+    return {
+      provinces: zoom >= 4 ? renderRegions(provinceRegions) : [],
+      cities: zoom >= 6 ? renderRegions(cityRegions) : [],
+      counties:
+        zoom >= 8
+          ? renderRegions(Object.values(countyRegionsByProvince).flat())
+          : [],
+    };
+  }, [
+    bounds,
+    centerWorld,
+    cityRegions,
+    countyRegionsByProvince,
+    provinceRegions,
+    viewport,
+    zoom,
+  ]);
 
   const gridStep = zoom <= 2 ? 60 : zoom <= 4 ? 20 : zoom <= 6 ? 5 : zoom <= 9 ? 1 : 0.2;
   const longitudeLines = useMemo(() => {
@@ -464,8 +708,8 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
           <div className="offline-note">
             <span>◎</span>
             <div>
-              <strong>离线坐标底图</strong>
-              <small>不请求在线地图服务</small>
+              <strong>真实离线地图</strong>
+              <small>省 Z4 · 市 Z6 · 县 Z8</small>
             </div>
           </div>
         </aside>
@@ -500,10 +744,6 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
-            onWheel={(event) => {
-              event.preventDefault();
-              changeZoom(zoom + (event.deltaY < 0 ? 1 : -1));
-            }}
           >
             <svg
               className="map-geography"
@@ -539,14 +779,88 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
                   />
                 );
               })}
-              {landPaths.map((path, index) => (
-                <path className="map-land" d={`${path} Z`} key={index} />
+              {countryPaths.map((country) => (
+                <path
+                  className="map-land"
+                  d={country.path}
+                  fillRule="evenodd"
+                  key={country.key}
+                />
               ))}
+              {administrativeLayers.provinces.map((region) => (
+                <path
+                  className="map-admin-boundary province"
+                  d={region.path}
+                  fillRule="evenodd"
+                  key={`province-${region.key}`}
+                />
+              ))}
+              {administrativeLayers.cities.map((region) => (
+                <path
+                  className="map-admin-boundary city"
+                  d={region.path}
+                  fillRule="evenodd"
+                  key={`city-${region.key}`}
+                />
+              ))}
+              {administrativeLayers.counties.map((region) => (
+                <path
+                  className="map-admin-boundary county"
+                  d={region.path}
+                  fillRule="evenodd"
+                  key={`county-${region.key}`}
+                />
+              ))}
+              {zoom >= 4 &&
+                zoom < 6 &&
+                administrativeLayers.provinces.map((region) => (
+                  <text
+                    className="map-place-label province"
+                    key={`province-label-${region.key}`}
+                    x={region.labelX}
+                    y={region.labelY}
+                  >
+                    {region.name}
+                  </text>
+                ))}
+              {zoom >= 6 &&
+                zoom < 9 &&
+                administrativeLayers.cities.map((region) => (
+                  <text
+                    className="map-place-label city"
+                    key={`city-label-${region.key}`}
+                    x={region.labelX}
+                    y={region.labelY}
+                  >
+                    {region.name}
+                  </text>
+                ))}
+              {zoom >= 9 &&
+                administrativeLayers.counties.map((region) => (
+                  <text
+                    className="map-place-label county"
+                    key={`county-label-${region.key}`}
+                    x={region.labelX}
+                    y={region.labelY}
+                  >
+                    {region.name}
+                  </text>
+                ))}
             </svg>
 
+            <div className="map-admin-level">
+              {zoom >= 8
+                ? "县级边界"
+                : zoom >= 6
+                  ? "市级边界"
+                  : zoom >= 4
+                    ? "省级边界"
+                    : "世界国界"}
+            </div>
             <div className="map-coordinate">
               {center.latitude.toFixed(3)}, {center.longitude.toFixed(3)} · Z{zoom}
             </div>
+            <div className="map-source">Natural Earth + ChinaGeoJson · 离线 JSON</div>
 
             <div className="map-controls" onPointerDown={(event) => event.stopPropagation()}>
               <button type="button" aria-label="放大地图" onClick={() => changeZoom(zoom + 1)}>
@@ -598,6 +912,13 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
               <div className="map-loading">
                 <span className="scan-pulse" />
                 正在聚合坐标…
+              </div>
+            )}
+
+            {mapDataLoading && !loading && (
+              <div className="map-loading">
+                <span className="scan-pulse" />
+                正在读取离线 GeoJSON…
               </div>
             )}
 

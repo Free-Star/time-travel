@@ -189,16 +189,78 @@
 
 .map-land {
   fill: #c9d0c6;
-  stroke: #aeb9ad;
+  stroke: #a6b2a6;
   stroke-linejoin: round;
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
+}
+
+.map-admin-boundary {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.map-admin-boundary.province {
+  stroke: rgba(73, 92, 75, 0.78);
+  stroke-width: 1.35;
+}
+
+.map-admin-boundary.city {
+  stroke: rgba(85, 105, 88, 0.55);
+  stroke-width: 0.9;
+}
+
+.map-admin-boundary.county {
+  stroke: rgba(96, 113, 99, 0.42);
+  stroke-width: 0.65;
+}
+
+.map-place-label {
+  fill: #445247;
+  stroke: rgba(237, 240, 233, 0.92);
+  stroke-width: 3px;
+  paint-order: stroke;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
+}
+
+.map-place-label.province {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.map-place-label.city {
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.map-place-label.county {
+  font-size: 8px;
+  font-weight: 600;
 }
 
 .map-grid-line {
   stroke: rgba(88, 108, 98, 0.12);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
+}
+
+.map-admin-level {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 6px 9px;
+  border: 1px solid rgba(116, 132, 119, 0.25);
+  border-radius: 6px;
+  color: #526356;
+  background: rgba(245, 247, 242, 0.86);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  pointer-events: none;
 }
 
 .map-coordinate {
@@ -211,6 +273,19 @@
   background: rgba(240, 244, 239, 0.78);
   font-family: Consolas, monospace;
   font-size: 8px;
+  pointer-events: none;
+}
+
+.map-source {
+  position: absolute;
+  right: 11px;
+  bottom: 9px;
+  padding: 5px 7px;
+  border-radius: 5px;
+  color: rgba(52, 67, 58, 0.64);
+  background: rgba(240, 244, 239, 0.78);
+  font-size: 8px;
+  letter-spacing: 0.04em;
   pointer-events: none;
 }
 
