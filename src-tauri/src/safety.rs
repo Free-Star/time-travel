@@ -116,6 +116,31 @@ pub fn create_directory_outside_library(
     fs::create_dir_all(directory).map_err(|error| format!("无法创建应用数据目录：{error}"))
 }
 
+pub fn create_file_outside_library(target: &Path, library_root: &Path) -> Result<File, String> {
+    ensure_write_outside_library(target, library_root)?;
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("写入路径没有父目录：{}", target.display()))?;
+    create_directory_outside_library(parent, library_root)?;
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(target)
+        .map_err(|error| format!("无法创建缓存文件：{error}"))
+}
+
+pub fn remove_directory_outside_library(
+    directory: &Path,
+    library_root: &Path,
+) -> Result<(), String> {
+    ensure_write_outside_library(directory, library_root)?;
+    if directory.exists() {
+        fs::remove_dir_all(directory).map_err(|error| format!("无法清理缓存目录：{error}"))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

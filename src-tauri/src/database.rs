@@ -36,6 +36,33 @@ pub struct IndexSummary {
     pub last_scan_at: Option<String>,
 }
 
+#[derive(Debug)]
+pub struct ThumbnailCandidate {
+    pub media_id: i64,
+    pub path: String,
+    pub media_kind: String,
+    pub modified_ns: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailPreview {
+    pub media_id: i64,
+    pub media_kind: String,
+    pub captured_at: String,
+    pub cache_path: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailStatus {
+    pub total_media: i64,
+    pub ready: i64,
+    pub failed: i64,
+    pub cache_bytes: i64,
+    pub ffmpeg_available: bool,
+}
+
 pub fn open(app: &AppHandle, library_root: &Path) -> Result<Connection, String> {
     let database_path = database_path(app)?;
     open_at(&database_path, library_root)
@@ -96,11 +123,183 @@ pub fn open_at(database_path: &Path, library_root: &Path) -> Result<Connection, 
             CREATE INDEX IF NOT EXISTS idx_media_captured_at ON media(captured_at);
             CREATE INDEX IF NOT EXISTS idx_media_location ON media(latitude, longitude);
             CREATE INDEX IF NOT EXISTS idx_media_library ON media(library_root);
+
+            CREATE TABLE IF NOT EXISTS thumbnails (
+                media_id            INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+                cache_path          TEXT,
+                source_modified_ns  INTEGER NOT NULL,
+                width               INTEGER,
+                height              INTEGER,
+                bytes               INTEGER NOT NULL DEFAULT 0,
+                status              TEXT NOT NULL CHECK (status IN ('ready', 'failed')),
+                error               TEXT,
+                generated_at        TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_thumbnails_status ON thumbnails(status);
             ",
         )
         .map_err(|error| format!("无法初始化索引数据库：{error}"))?;
 
     Ok(connection)
+}
+
+pub fn thumbnail_candidates(
+    connection: &Connection,
+    root: &Path,
+    limit: usize,
+) -> Result<Vec<ThumbnailCandidate>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT m.id, m.path, m.media_kind, m.modified_ns
+            FROM media m
+            LEFT JOIN thumbnails t ON t.media_id = m.id
+            WHERE m.library_root = ?1
+              AND (
+                t.media_id IS NULL
+                OR t.source_modified_ns <> m.modified_ns
+              )
+            ORDER BY m.captured_at DESC, m.id DESC
+            LIMIT ?2
+            ",
+        )
+        .map_err(|error| format!("无法准备缩略图队列：{error}"))?;
+    let rows = statement
+        .query_map(params![root.to_string_lossy(), limit as i64], |row| {
+            Ok(ThumbnailCandidate {
+                media_id: row.get(0)?,
+                path: row.get(1)?,
+                media_kind: row.get(2)?,
+                modified_ns: row.get(3)?,
+            })
+        })
+        .map_err(|error| format!("无法读取缩略图队列：{error}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("无法解析缩略图队列：{error}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn record_thumbnail(
+    connection: &Connection,
+    media_id: i64,
+    source_modified_ns: i64,
+    cache_path: Option<&Path>,
+    width: Option<u32>,
+    height: Option<u32>,
+    bytes: i64,
+    status: &str,
+    error: Option<&str>,
+    generated_at: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "
+            INSERT INTO thumbnails (
+                media_id, cache_path, source_modified_ns, width, height,
+                bytes, status, error, generated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(media_id) DO UPDATE SET
+                cache_path = excluded.cache_path,
+                source_modified_ns = excluded.source_modified_ns,
+                width = excluded.width,
+                height = excluded.height,
+                bytes = excluded.bytes,
+                status = excluded.status,
+                error = excluded.error,
+                generated_at = excluded.generated_at
+            ",
+            params![
+                media_id,
+                cache_path.map(|path| path.to_string_lossy().to_string()),
+                source_modified_ns,
+                width.map(i64::from),
+                height.map(i64::from),
+                bytes,
+                status,
+                error,
+                generated_at,
+            ],
+        )
+        .map(|_| ())
+        .map_err(|error| format!("无法记录缩略图结果：{error}"))
+}
+
+pub fn thumbnail_status(connection: &Connection, root: &Path) -> Result<ThumbnailStatus, String> {
+    connection
+        .query_row(
+            "
+            SELECT
+                COUNT(m.id),
+                SUM(CASE WHEN t.status = 'ready' AND t.source_modified_ns = m.modified_ns THEN 1 ELSE 0 END),
+                SUM(CASE WHEN t.status = 'failed' AND t.source_modified_ns = m.modified_ns THEN 1 ELSE 0 END),
+                SUM(CASE WHEN t.status = 'ready' AND t.source_modified_ns = m.modified_ns THEN t.bytes ELSE 0 END)
+            FROM media m
+            LEFT JOIN thumbnails t ON t.media_id = m.id
+            WHERE m.library_root = ?1
+            ",
+            [root.to_string_lossy().as_ref()],
+            |row| {
+                Ok(ThumbnailStatus {
+                    total_media: row.get(0)?,
+                    ready: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                    failed: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                    cache_bytes: row.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                    ffmpeg_available: false,
+                })
+            },
+        )
+        .map_err(|error| format!("无法读取缩略图状态：{error}"))
+}
+
+pub fn thumbnail_previews(
+    connection: &Connection,
+    root: &Path,
+    limit: usize,
+) -> Result<Vec<ThumbnailPreview>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT m.id, m.media_kind, m.captured_at, t.cache_path
+            FROM media m
+            JOIN thumbnails t ON t.media_id = m.id
+            WHERE m.library_root = ?1
+              AND t.status = 'ready'
+              AND t.source_modified_ns = m.modified_ns
+              AND t.cache_path IS NOT NULL
+            ORDER BY m.captured_at DESC, m.id DESC
+            LIMIT ?2
+            ",
+        )
+        .map_err(|error| format!("无法准备预览查询：{error}"))?;
+    let rows = statement
+        .query_map(params![root.to_string_lossy(), limit as i64], |row| {
+            Ok(ThumbnailPreview {
+                media_id: row.get(0)?,
+                media_kind: row.get(1)?,
+                captured_at: row.get(2)?,
+                cache_path: row.get(3)?,
+            })
+        })
+        .map_err(|error| format!("无法读取预览：{error}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("无法解析预览：{error}"))
+}
+
+pub fn clear_thumbnails(connection: &Connection, root: &Path) -> Result<usize, String> {
+    connection
+        .execute(
+            "
+            DELETE FROM thumbnails
+            WHERE media_id IN (
+                SELECT id FROM media WHERE library_root = ?1
+            )
+            ",
+            [root.to_string_lossy().as_ref()],
+        )
+        .map_err(|error| format!("无法清除缩略图记录：{error}"))
 }
 
 pub fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
