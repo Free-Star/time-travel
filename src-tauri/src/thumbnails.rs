@@ -48,6 +48,19 @@ impl ThumbnailControl {
         }
     }
 
+    pub fn try_begin(&self) -> Result<Option<Arc<AtomicBool>>, String> {
+        let mut guard = self
+            .active_cancel
+            .lock()
+            .map_err(|_| "缩略图任务状态锁已损坏".to_string())?;
+        if guard.is_some() {
+            return Ok(None);
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        *guard = Some(cancel.clone());
+        Ok(Some(cancel))
+    }
+
     pub fn cancel(&self) -> bool {
         self.active_cancel
             .lock()
@@ -70,6 +83,14 @@ pub struct ThumbnailProgress {
     pub ready: usize,
     pub failed: usize,
     pub current_path: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailResult {
+    pub media_id: i64,
+    pub status: String,
+    pub cache_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -100,6 +121,7 @@ pub fn generate(
         cancel,
         limit,
         None,
+        false,
     )
 }
 
@@ -108,6 +130,7 @@ pub fn generate_selected(
     library_root: &Path,
     cancel: &AtomicBool,
     media_ids: &[i64],
+    retry_failed: bool,
 ) -> Result<ThumbnailReport, String> {
     if media_ids.is_empty() || media_ids.len() > 100 {
         return Err("可见预览批次必须包含 1 到 100 个媒体".to_string());
@@ -123,6 +146,7 @@ pub fn generate_selected(
         cancel,
         media_ids.len(),
         Some(media_ids),
+        retry_failed,
     )
 }
 
@@ -134,12 +158,13 @@ fn generate_core(
     cancel: &AtomicBool,
     limit: usize,
     media_ids: Option<&[i64]>,
+    retry_failed: bool,
 ) -> Result<ThumbnailReport, String> {
     let root = safety::canonical_existing(library_root)?;
     safety::create_directory_outside_library(cache, &root)?;
     let connection = database::open_at(database_path, &root)?;
     let candidates = if let Some(media_ids) = media_ids {
-        database::thumbnail_candidates_by_ids(&connection, &root, media_ids)?
+        database::thumbnail_candidates_by_ids(&connection, &root, media_ids, retry_failed)?
     } else {
         database::thumbnail_candidates(&connection, &root, limit.clamp(1, 1000))?
     };
@@ -189,6 +214,14 @@ fn generate_core(
                     &Local::now().to_rfc3339(),
                 )?;
                 progress.ready += 1;
+                emit_result(
+                    app,
+                    &ThumbnailResult {
+                        media_id: candidate.media_id,
+                        status: "ready".to_string(),
+                        cache_path: Some(output.to_string_lossy().to_string()),
+                    },
+                );
             }
             Err(error) => {
                 database::record_thumbnail(
@@ -204,6 +237,14 @@ fn generate_core(
                     &Local::now().to_rfc3339(),
                 )?;
                 progress.failed += 1;
+                emit_result(
+                    app,
+                    &ThumbnailResult {
+                        media_id: candidate.media_id,
+                        status: "failed".to_string(),
+                        cache_path: None,
+                    },
+                );
             }
         }
 
@@ -413,6 +454,12 @@ fn emit_progress(app: Option<&AppHandle>, progress: &ThumbnailProgress) {
     }
 }
 
+fn emit_result(app: Option<&AppHandle>, result: &ThumbnailResult) {
+    if let Some(app) = app {
+        let _ = app.emit("thumbnail-result", result);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,8 +492,17 @@ mod tests {
     fn thumbnail_control_cancels_an_active_job() {
         let control = ThumbnailControl::default();
         let token = control.begin().expect("thumbnail job begins");
+        assert!(control
+            .try_begin()
+            .expect("busy thumbnail state remains readable")
+            .is_none());
         assert!(control.cancel());
         assert!(token.load(Ordering::Relaxed));
+        control.finish();
+        assert!(control
+            .try_begin()
+            .expect("automatic thumbnail job begins after finish")
+            .is_some());
         control.finish();
     }
 
@@ -545,6 +601,7 @@ mod tests {
             &AtomicBool::new(false),
             100,
             None,
+            false,
         )
         .expect("real thumbnail batch succeeds");
         assert_eq!(report.status, "completed");

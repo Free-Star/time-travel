@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { feature as topologyFeature } from "topojson-client";
 import MediaViewer from "./MediaViewer";
@@ -46,6 +47,12 @@ type MapCluster = {
 type MapClusterWindow = {
   total: number;
   items: TimelineItem[];
+};
+
+type ThumbnailResult = {
+  mediaId: number;
+  status: "ready" | "failed";
+  cachePath: string | null;
 };
 
 type MapViewProps = {
@@ -245,6 +252,7 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const clusterRequest = useRef(0);
+  const automaticPreviewJob = useRef(false);
   const countyRequests = useRef(new Set<string>());
   const dragState = useRef<{
     pointerId: number;
@@ -274,6 +282,7 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
   const [viewer, setViewer] = useState<TimelineItem | null>(null);
   const [failedImages, setFailedImages] = useState<Set<number>>(() => new Set());
   const [generating, setGenerating] = useState(false);
+  const [previewQueueTick, setPreviewQueueTick] = useState(0);
   const displayMonths = useMemo(() => [...months].reverse(), [months]);
 
   useEffect(() => {
@@ -281,6 +290,39 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
       .then((result) => setMonths(result.filter((month) => month.withLocation > 0)))
       .catch((reason) => onError(String(reason)));
   }, [onError]);
+
+  useEffect(() => {
+    const unlisten = listen<ThumbnailResult>("thumbnail-result", (event) => {
+      const result = event.payload;
+      setClusterWindow((current) =>
+        current
+          ? {
+              ...current,
+              items: current.items.map((item) =>
+                item.id === result.mediaId
+                  ? {
+                      ...item,
+                      thumbnailPath: result.cachePath,
+                      thumbnailStatus: result.status,
+                    }
+                  : item,
+              ),
+            }
+          : current,
+      );
+      if (result.status === "ready") {
+        setFailedImages((current) => {
+          if (!current.has(result.mediaId)) return current;
+          const next = new Set(current);
+          next.delete(result.mediaId);
+          return next;
+        });
+      }
+    });
+    return () => {
+      void unlisten.then((dispose) => dispose());
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -696,12 +738,13 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
   }
 
   async function generateRegionPreviews() {
-    if (!selectedCluster || !clusterWindow) return;
+    if (!selectedCluster || !clusterWindow || automaticPreviewJob.current) return;
     const mediaIds = clusterWindow.items
       .filter((item) => !item.thumbnailPath)
       .slice(0, 24)
       .map((item) => item.id);
     if (!mediaIds.length) return;
+    automaticPreviewJob.current = true;
     setGenerating(true);
     try {
       await invoke("generate_timeline_thumbnails", { mediaIds });
@@ -709,9 +752,43 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
     } catch (reason) {
       onError(String(reason));
     } finally {
+      automaticPreviewJob.current = false;
       setGenerating(false);
+      setPreviewQueueTick((value) => value + 1);
     }
   }
+
+  const automaticPreviewIds = useMemo(
+    () =>
+      (clusterWindow?.items ?? [])
+        .filter((item) => !item.thumbnailPath && item.thumbnailStatus !== "failed")
+        .slice(0, 24)
+        .map((item) => item.id),
+    [clusterWindow],
+  );
+  const automaticPreviewKey = automaticPreviewIds.join(",");
+
+  useEffect(() => {
+    if (!automaticPreviewKey || automaticPreviewJob.current) return;
+    const mediaIds = automaticPreviewIds;
+    const timer = window.setTimeout(() => {
+      automaticPreviewJob.current = true;
+      setGenerating(true);
+      invoke<unknown | null>("ensure_timeline_thumbnails", { mediaIds })
+        .then((report) => {
+          window.setTimeout(
+            () => setPreviewQueueTick((value) => value + 1),
+            report ? 0 : 400,
+          );
+        })
+        .catch((reason) => onError(String(reason)))
+        .finally(() => {
+          automaticPreviewJob.current = false;
+          setGenerating(false);
+        });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [automaticPreviewIds, automaticPreviewKey, onError, previewQueueTick]);
 
   function screenPoint(longitude: number, latitude: number) {
     const point = project(longitude, latitude, zoom);
@@ -961,7 +1038,7 @@ export default function MapView({ totalLocated, onError }: MapViewProps) {
                         disabled={generating}
                         onClick={generateRegionPreviews}
                       >
-                        {generating ? "正在生成…" : "补全区域预览"}
+                        {generating ? "实时生成中…" : "重试失败预览"}
                       </button>
                     )}
                     <button

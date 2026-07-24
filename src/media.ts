@@ -13,6 +13,7 @@ export type TimelineItem = {
   width: number | null;
   height: number | null;
   thumbnailPath: string | null;
+  thumbnailStatus: "ready" | "failed" | null;
 };
 
 export function dateFromArchive(value: string) {

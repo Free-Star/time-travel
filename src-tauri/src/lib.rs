@@ -111,11 +111,34 @@ async fn generate_timeline_thumbnails(
         .ok_or_else(|| "请先选择相册目录".to_string())?;
     let cancel = thumbnail_control.begin()?;
     let task_result = tauri::async_runtime::spawn_blocking(move || {
-        thumbnails::generate_selected(&app, &root, &cancel, &media_ids)
+        thumbnails::generate_selected(&app, &root, &cancel, &media_ids, true)
     })
     .await;
     thumbnail_control.finish();
     task_result.map_err(|error| format!("可见预览任务异常退出：{error}"))?
+}
+
+#[tauri::command]
+async fn ensure_timeline_thumbnails(
+    app: AppHandle,
+    library_state: State<'_, AppState>,
+    thumbnail_control: State<'_, ThumbnailControl>,
+    media_ids: Vec<i64>,
+) -> Result<Option<ThumbnailReport>, String> {
+    let root = library_state
+        .root()?
+        .ok_or_else(|| "请先选择相册目录".to_string())?;
+    let Some(cancel) = thumbnail_control.try_begin()? else {
+        return Ok(None);
+    };
+    let task_result = tauri::async_runtime::spawn_blocking(move || {
+        thumbnails::generate_selected(&app, &root, &cancel, &media_ids, false)
+    })
+    .await;
+    thumbnail_control.finish();
+    task_result
+        .map_err(|error| format!("实时预览任务异常退出：{error}"))?
+        .map(Some)
 }
 
 #[tauri::command]
@@ -308,6 +331,7 @@ pub fn run() {
             thumbnail_previews,
             generate_thumbnails,
             generate_timeline_thumbnails,
+            ensure_timeline_thumbnails,
             cancel_thumbnails,
             clear_thumbnail_cache,
             timeline_months,

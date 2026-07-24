@@ -92,6 +92,7 @@ pub struct TimelineItem {
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub thumbnail_path: Option<String>,
+    pub thumbnail_status: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -286,6 +287,7 @@ pub fn thumbnail_candidates_by_ids(
     connection: &Connection,
     root: &Path,
     media_ids: &[i64],
+    retry_failed: bool,
 ) -> Result<Vec<ThumbnailCandidate>, String> {
     let mut statement = connection
         .prepare(
@@ -298,7 +300,7 @@ pub fn thumbnail_candidates_by_ids(
               AND (
                 t.media_id IS NULL
                 OR t.source_modified_ns <> m.modified_ns
-                OR t.status = 'failed'
+                OR (?3 = 1 AND t.status = 'failed')
               )
             ",
         )
@@ -306,14 +308,17 @@ pub fn thumbnail_candidates_by_ids(
     let mut candidates = Vec::with_capacity(media_ids.len());
     for media_id in media_ids {
         let candidate = statement
-            .query_row(params![root.to_string_lossy(), media_id], |row| {
-                Ok(ThumbnailCandidate {
-                    media_id: row.get(0)?,
-                    path: row.get(1)?,
-                    media_kind: row.get(2)?,
-                    modified_ns: row.get(3)?,
-                })
-            })
+            .query_row(
+                params![root.to_string_lossy(), media_id, retry_failed],
+                |row| {
+                    Ok(ThumbnailCandidate {
+                        media_id: row.get(0)?,
+                        path: row.get(1)?,
+                        media_kind: row.get(2)?,
+                        modified_ns: row.get(3)?,
+                    })
+                },
+            )
             .optional()
             .map_err(|error| format!("无法读取可见预览队列：{error}"))?;
         if let Some(candidate) = candidate {
@@ -494,6 +499,7 @@ fn map_timeline_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<TimelineItem> 
         width: row.get(11)?,
         height: row.get(12)?,
         thumbnail_path: row.get(13)?,
+        thumbnail_status: row.get(14)?,
     })
 }
 
@@ -529,6 +535,10 @@ pub fn timeline_window(
                 CASE
                     WHEN t.status = 'ready' AND t.source_modified_ns = m.modified_ns
                     THEN t.cache_path
+                    ELSE NULL
+                END,
+                CASE
+                    WHEN t.source_modified_ns = m.modified_ns THEN t.status
                     ELSE NULL
                 END
             FROM media m
@@ -578,6 +588,10 @@ pub fn timeline_item(
                     WHEN t.status = 'ready' AND t.source_modified_ns = m.modified_ns
                     THEN t.cache_path
                     ELSE NULL
+                END,
+                CASE
+                    WHEN t.source_modified_ns = m.modified_ns THEN t.status
+                    ELSE NULL
                 END
             FROM media m
             LEFT JOIN thumbnails t ON t.media_id = m.id
@@ -611,6 +625,10 @@ pub fn timeline_neighbor(
             CASE
                 WHEN t.status = 'ready' AND t.source_modified_ns = m.modified_ns
                 THEN t.cache_path
+                ELSE NULL
+            END,
+            CASE
+                WHEN t.source_modified_ns = m.modified_ns THEN t.status
                 ELSE NULL
             END
         FROM media m
@@ -854,6 +872,10 @@ pub fn map_cluster_items(
             CASE
                 WHEN t.status = 'ready' AND t.source_modified_ns = m.modified_ns
                 THEN t.cache_path
+                ELSE NULL
+            END,
+            CASE
+                WHEN t.source_modified_ns = m.modified_ns THEN t.status
                 ELSE NULL
             END
         FROM media m
@@ -1232,7 +1254,7 @@ mod tests {
         assert_eq!(first.items.len(), 1);
         assert_eq!(first.items[0].relative_path, "2025/02/new.jpg");
 
-        let selected = thumbnail_candidates_by_ids(&connection, &root, &[first.items[0].id])
+        let selected = thumbnail_candidates_by_ids(&connection, &root, &[first.items[0].id], true)
             .expect("query selected thumbnail candidate");
         assert_eq!(selected.len(), 1);
         let cache_path = base.join("cache").join("first.jpg");
@@ -1250,9 +1272,41 @@ mod tests {
         )
         .expect("record selected thumbnail");
         assert!(
-            thumbnail_candidates_by_ids(&connection, &root, &[first.items[0].id])
+            thumbnail_candidates_by_ids(&connection, &root, &[first.items[0].id], true)
                 .expect("query completed selected thumbnail")
                 .is_empty()
+        );
+
+        let all = timeline_window(&connection, &root, "2025-02", 0, 2)
+            .expect("query full timeline window");
+        let failed_id = all.items[1].id;
+        let failed_modified_ns =
+            thumbnail_candidates_by_ids(&connection, &root, &[failed_id], true)
+                .expect("query failed thumbnail candidate")[0]
+                .modified_ns;
+        record_thumbnail(
+            &connection,
+            failed_id,
+            failed_modified_ns,
+            None,
+            None,
+            None,
+            0,
+            "failed",
+            Some("unsupported"),
+            "2025-03-01T00:00:01",
+        )
+        .expect("record failed thumbnail");
+        assert!(
+            thumbnail_candidates_by_ids(&connection, &root, &[failed_id], false)
+                .expect("skip failed automatic candidate")
+                .is_empty()
+        );
+        assert_eq!(
+            thumbnail_candidates_by_ids(&connection, &root, &[failed_id], true)
+                .expect("retry failed manual candidate")
+                .len(),
+            1
         );
 
         let older = timeline_neighbor(

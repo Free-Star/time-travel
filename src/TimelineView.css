@@ -116,6 +116,24 @@
   font-size: 11px;
 }
 
+.timeline-realtime-status {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  color: #647360;
+  font-size: 10px;
+}
+
+.timeline-realtime-status span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #738b70;
+  box-shadow: 0 0 0 4px rgba(115, 139, 112, 0.13);
+  animation: realtime-pulse 1.2s ease-in-out infinite;
+}
+
 .virtual-viewport {
   position: relative;
   min-height: 0;
@@ -181,15 +199,36 @@
 }
 
 .media-placeholder {
+  position: relative;
   display: grid;
   width: 100%;
   height: 100%;
+  overflow: hidden;
   place-content: center;
   color: #8e8c83;
   background:
     linear-gradient(145deg, rgba(255, 255, 255, 0.24), transparent),
     #dcd8ce;
   text-align: center;
+}
+
+.media-placeholder.is-pending::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.42) 48%,
+    transparent 66%
+  );
+  content: "";
+  transform: translateX(-100%);
+  animation: thumbnail-shimmer 1.35s ease-in-out infinite;
+}
+
+.media-placeholder.is-failed {
+  color: #99958b;
+  background: #d8d4cb;
 }
 
 .media-placeholder b {
@@ -253,6 +292,19 @@
   padding: 10px 0 0;
   color: #99978e;
   font-size: 9px;
+}
+
+@keyframes realtime-pulse {
+  50% {
+    opacity: 0.45;
+    transform: scale(0.72);
+  }
+}
+
+@keyframes thumbnail-shimmer {
+  to {
+    transform: translateX(100%);
+  }
 }
 
 .viewer-backdrop {
