@@ -224,6 +224,27 @@ pub fn open_at(database_path: &Path, library_root: &Path) -> Result<Connection, 
             );
 
             CREATE INDEX IF NOT EXISTS idx_thumbnails_status ON thumbnails(status);
+
+            CREATE TABLE IF NOT EXISTS journal_sources (
+                journal_root TEXT PRIMARY KEY,
+                vault_root TEXT NOT NULL,
+                last_scan_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS journal_entries (
+                id INTEGER PRIMARY KEY,
+                journal_root TEXT NOT NULL,
+                vault_root TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                relative_path TEXT NOT NULL,
+                entry_date TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                modified_ns INTEGER NOT NULL,
+                indexed_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_journal_root_date ON journal_entries(journal_root, entry_date DESC);
             ",
         )
         .map_err(|error| format!("无法初始化索引数据库：{error}"))?;
@@ -603,6 +624,44 @@ pub fn timeline_item(
         )
         .optional()
         .map_err(|error| format!("无法读取媒体详情：{error}"))
+}
+
+pub fn media_for_date(
+    connection: &Connection,
+    root: &Path,
+    date: &str,
+    limit: usize,
+) -> Result<Vec<TimelineItem>, String> {
+    if chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_err() {
+        return Err("媒体日期格式无效".to_string());
+    }
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT
+                m.id, m.path, m.relative_path, m.media_kind, m.extension,
+                m.size_bytes, m.captured_at, m.captured_source,
+                m.captured_precision, m.latitude, m.longitude, m.width, m.height,
+                CASE WHEN t.status='ready' AND t.source_modified_ns=m.modified_ns THEN t.cache_path ELSE NULL END,
+                CASE WHEN t.source_modified_ns=m.modified_ns THEN t.status ELSE NULL END
+            FROM media m LEFT JOIN thumbnails t ON t.media_id=m.id
+            WHERE m.library_root=?1 AND m.captured_at LIKE ?2
+            ORDER BY m.captured_at ASC, m.id ASC LIMIT ?3
+            ",
+        )
+        .map_err(|error| format!("无法准备当日媒体查询：{error}"))?;
+    let rows = statement
+        .query_map(
+            params![
+                root.to_string_lossy(),
+                format!("{date}%"),
+                limit.clamp(1, 200) as i64
+            ],
+            map_timeline_item,
+        )
+        .map_err(|error| format!("无法读取当日媒体：{error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("无法解析当日媒体：{error}"))
 }
 
 pub fn timeline_neighbor(

@@ -22,7 +22,10 @@ use crate::{
     safety,
 };
 
-const THUMBNAIL_EDGE: u32 = 512;
+// Timeline/map cards never render near 512 physical pixels. A 320px cache cuts
+// decode, encode, disk and WebView upload cost while the viewer still opens the
+// original media for full-resolution inspection.
+const THUMBNAIL_EDGE: u32 = 320;
 
 #[derive(Default)]
 pub struct ThumbnailControl {
@@ -476,7 +479,7 @@ fn encode_thumbnail(
     let width = thumbnail.width();
     let height = thumbnail.height();
     let output_file = safety::create_file_outside_library(output, root)?;
-    JpegEncoder::new_with_quality(output_file, 82)
+    JpegEncoder::new_with_quality(output_file, 76)
         .encode_image(&thumbnail)
         .map_err(|error| format!("无法编码缩略图：{error}"))?;
     let bytes = output
@@ -523,7 +526,7 @@ fn generate_video(
                 "-frames:v",
                 "1",
                 "-vf",
-                "scale=512:512:force_original_aspect_ratio=decrease",
+                "scale=320:320:force_original_aspect_ratio=decrease",
                 "-q:v",
                 "4",
                 "-y",
@@ -827,7 +830,7 @@ mod tests {
 
         let generated =
             generate_image(&source, &output, &library).expect("generate image thumbnail");
-        assert_eq!((generated.width, generated.height), (512, 341));
+        assert_eq!((generated.width, generated.height), (320, 213));
         assert!(generated.bytes > 0);
         assert_eq!(fs::read(&source).expect("read source after"), before_bytes);
         assert_eq!(
@@ -875,7 +878,7 @@ mod tests {
 
         let generated = generate_video(&ffmpeg, &source, &output, &library, &cache)
             .expect("generate video cover");
-        assert_eq!((generated.width, generated.height), (512, 288));
+        assert_eq!((generated.width, generated.height), (320, 180));
         assert!(generated.bytes > 0);
         assert_eq!(fs::read(&source).expect("read video after"), before_bytes);
         assert_eq!(

@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import "./App.css";
 import MapView from "./MapView";
 import TimelineView from "./TimelineView";
+import JournalView, { type JournalSummary } from "./JournalView";
+import SettingsView from "./SettingsView";
 
 type LibrarySummary = {
   root: string;
@@ -13,6 +15,8 @@ type LibrarySummary = {
   topLevelMedia: number;
   projectDirectoryExcluded: boolean;
   writePolicy: string;
+  online: boolean;
+  active: boolean;
 };
 
 type IndexSummary = {
@@ -39,20 +43,37 @@ type ScanReport = ScanProgress & {
   summary: IndexSummary;
 };
 
+type JournalScanReport = {
+  discovered: number;
+  indexed: number;
+  unchanged: number;
+  skipped: number;
+  removed: number;
+  summary: JournalSummary;
+};
+
 function App() {
-  const [view, setView] = useState<"home" | "timeline" | "map">("home");
+  const [view, setView] = useState<"home" | "timeline" | "map" | "journal" | "settings">("home");
   const [library, setLibrary] = useState<LibrarySummary | null>(null);
+  const [libraries, setLibraries] = useState<LibrarySummary[]>([]);
   const [index, setIndex] = useState<IndexSummary | null>(null);
-  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [, setScanProgress] = useState<ScanProgress | null>(null);
   const [scanning, setScanning] = useState(false);
-  const [busy, setBusy] = useState(true);
+  const [journal, setJournal] = useState<JournalSummary | null>(null);
+  const [journalScanning, setJournalScanning] = useState(false);
+  const [, setJournalReport] = useState<JournalScanReport | null>(null);
+  const [, setBusy] = useState(true);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    invoke<LibrarySummary | null>("current_library")
-      .then((summary) => {
+    Promise.all([
+      invoke<LibrarySummary | null>("current_library"),
+      invoke<LibrarySummary[]>("library_roots"),
+    ])
+      .then(([summary, roots]) => {
         setLibrary(summary);
-        if (summary) return loadLibraryData();
+        setLibraries(roots);
+        if (summary?.online) return loadLibraryData();
       })
       .catch((reason) => setError(String(reason)))
       .finally(() => setBusy(false));
@@ -68,7 +89,10 @@ function App() {
   }, []);
 
   async function loadLibraryData() {
-    await loadIndex();
+    await Promise.all([
+      loadIndex(),
+      invoke<JournalSummary | null>("current_journal").then(setJournal),
+    ]);
   }
 
   async function loadIndex() {
@@ -92,11 +116,41 @@ function App() {
         root: selected,
       });
       setLibrary(summary);
+      setLibraries(await invoke<LibrarySummary[]>("library_roots"));
       await loadLibraryData();
     } catch (reason) {
       setError(String(reason));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function activateLibrary(root: string) {
+    setError("");
+    try {
+      const summary = await invoke<LibrarySummary>("activate_library", { root });
+      setLibrary(summary);
+      setLibraries(await invoke<LibrarySummary[]>("library_roots"));
+      setIndex(null);
+      setJournal(null);
+      await loadLibraryData();
+      setView("home");
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }
+
+  async function removeLibrary(root: string) {
+    setError("");
+    try {
+      const summary = await invoke<LibrarySummary | null>("remove_library", { root });
+      setLibrary(summary);
+      setLibraries(await invoke<LibrarySummary[]>("library_roots"));
+      setIndex(null);
+      setJournal(null);
+      if (summary?.online) await loadLibraryData();
+    } catch (reason) {
+      setError(String(reason));
     }
   }
 
@@ -123,8 +177,40 @@ function App() {
     }
   }
 
-  async function cancelScan() {
-    await invoke<boolean>("cancel_scan");
+  async function chooseJournal() {
+    setError("");
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "选择 Obsidian 日记目录",
+    });
+    if (!selected) return;
+    setJournalScanning(true);
+    try {
+      const configured = await invoke<JournalSummary>("configure_journal", { root: selected });
+      setJournal(configured);
+      const report = await invoke<JournalScanReport>("scan_journal");
+      setJournal(report.summary);
+      setJournalReport(report);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setJournalScanning(false);
+    }
+  }
+
+  async function scanJournal() {
+    setError("");
+    setJournalScanning(true);
+    try {
+      const report = await invoke<JournalScanReport>("scan_journal");
+      setJournal(report.summary);
+      setJournalReport(report);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setJournalScanning(false);
+    }
   }
 
   const number = new Intl.NumberFormat("zh-CN");
@@ -170,6 +256,27 @@ function App() {
           >
             <span>⌖</span>地图
           </button>
+          <button
+            className={`nav-item ${view === "journal" ? "active" : ""}`}
+            type="button"
+            disabled={!journal?.total}
+            onClick={() => {
+              setError("");
+              setView("journal");
+            }}
+          >
+            <span>☷</span>日记
+          </button>
+          <button
+            className={`nav-item ${view === "settings" ? "active" : ""}`}
+            type="button"
+            onClick={() => {
+              setError("");
+              setView("settings");
+            }}
+          >
+            <span>⚙</span>设置
+          </button>
         </nav>
 
         <div className="sidebar-foot">
@@ -181,15 +288,16 @@ function App() {
       <main>
         <header className="topbar">
           <div>
-            <span className="eyebrow">阶段 5 · 时间与空间联动</span>
             <h1>
               {view === "timeline"
                 ? "沿着时间，重看记忆"
                 : view === "map"
                   ? "记忆曾在哪里发生"
-                : library
-                  ? "相册已连接"
-                  : "连接你的相册库"}
+                  : view === "journal"
+                    ? "让文字与影像再次相遇"
+                    : view === "settings"
+                      ? "管理你的本地记忆库"
+                : "欢迎回到 TimeTravel"}
             </h1>
           </div>
           {view !== "map" && <div className="readonly-pill">只读模式</div>}
@@ -203,208 +311,111 @@ function App() {
         )}
 
         {view === "home" ? (
-          <section className="content">
-          <div className="hero-card">
-            <div className="hero-copy">
-              <span className="section-label">READ-ONLY BY DESIGN</span>
-              <h2>
-                只观察记忆，
-                <br />
-                不改变原件。
-              </h2>
-              <p>
-                TimeTravel 只读取媒体和元数据。索引、缩略图与所有人工修正都会保存在相册目录之外。
-              </p>
-
-              <button
-                className="primary-button"
-                type="button"
-                onClick={chooseLibrary}
-                disabled={busy}
-              >
-                {busy ? "正在确认…" : library ? "更换相册目录" : "选择相册目录"}
-                <span>→</span>
-              </button>
-
-              {error && <p className="error-message">{error}</p>}
-            </div>
-
-            <div className="safety-panel">
-              <div className="shield">✓</div>
-              <h3>媒体安全边界</h3>
-              <ul>
-                <li>
-                  <span>✓</span>不写入文件内容或 EXIF
-                </li>
-                <li>
-                  <span>✓</span>不移动、重命名或删除
-                </li>
-                <li>
-                  <span>✓</span>写入目标位于相册内时立即拒绝
-                </li>
-                <li>
-                  <span>✓</span>开发目录自动排除扫描
-                </li>
-              </ul>
-            </div>
-          </div>
-
-          {library && (
-            <section className="library-card" aria-live="polite">
+          <section className="home-dashboard">
+            <div className="home-intro">
               <div>
-                <span className="section-label">当前数据源</span>
-                <h3>{library.displayName}</h3>
-                <code>{library.root}</code>
+                <span className="section-label">YOUR MEMORY, LOCAL FIRST</span>
+                <h2>从时间、地点与文字<br />重新走进记忆。</h2>
+                <p>照片是画面，日记是叙述。所有内容只在本机读取和整理。</p>
               </div>
-              <dl>
-                <div>
-                  <dt>一级目录</dt>
-                  <dd>{library.topLevelFolders}</dd>
-                </div>
-                <div>
-                  <dt>根目录媒体</dt>
-                  <dd>{library.topLevelMedia}</dd>
-                </div>
-                <div>
-                  <dt>开发目录</dt>
-                  <dd>{library.projectDirectoryExcluded ? "已排除" : "不在相册内"}</dd>
-                </div>
-                <div>
-                  <dt>写入策略</dt>
-                  <dd>{library.writePolicy}</dd>
-                </div>
-              </dl>
-              <p className="next-step">
-                扫描只读取路径、文件属性与照片 EXIF；数据库位于系统应用数据目录。
-              </p>
-            </section>
-          )}
-
-          {library && (
-            <section className="scan-card">
-              <div className="scan-heading">
-                <div>
-                  <span className="section-label">本地媒体索引</span>
-                  <h3>{index?.total ? `${number.format(index.total)} 个媒体` : "尚未建立索引"}</h3>
-                  <p>
-                    {index?.needsMetadataRefresh
-                      ? "日期识别规则已更新，请执行一次只读索引刷新后再进入时间线。"
-                      : index?.lastScanAt
-                        ? `上次完成：${new Date(index.lastScanAt).toLocaleString("zh-CN")}`
-                        : "首次扫描会读取媒体元数据，但不会生成缩略图。"}
-                  </p>
-                </div>
-                <div className="scan-actions">
-                  {scanning ? (
-                    <button className="secondary-button" type="button" onClick={cancelScan}>
-                      停止扫描
-                    </button>
-                  ) : (
-                    <button className="primary-button compact" type="button" onClick={startScan}>
-                      {index?.needsMetadataRefresh
-                        ? "更新元数据索引"
-                        : index?.total
-                          ? "增量扫描"
-                          : "开始只读扫描"}
-                      <span>→</span>
-                    </button>
-                  )}
-                </div>
+              <div className="home-summary">
+                <div><span>媒体</span><strong>{number.format(index?.total ?? 0)}</strong></div>
+                <div><span>地点</span><strong>{number.format(index?.withLocation ?? 0)}</strong></div>
+                <div><span>日记</span><strong>{number.format(journal?.total ?? 0)}</strong></div>
               </div>
+            </div>
 
-              {(index?.total || scanProgress) && (
-                <div className="index-stats">
-                  <div>
-                    <span>照片</span>
-                    <strong>{number.format(index?.photos ?? scanProgress?.inserted ?? 0)}</strong>
-                  </div>
-                  <div>
-                    <span>视频</span>
-                    <strong>{number.format(index?.videos ?? 0)}</strong>
-                  </div>
-                  <div>
-                    <span>带定位</span>
-                    <strong>{number.format(index?.withLocation ?? 0)}</strong>
-                  </div>
-                  <div>
-                    <span>{scanning ? "已发现" : "错误"}</span>
-                    <strong>
-                      {number.format(
-                        scanning ? (scanProgress?.discovered ?? 0) : (scanProgress?.errors ?? 0),
-                      )}
-                    </strong>
-                  </div>
-                </div>
-              )}
+            {!library || !index?.total ? (
+              <button className="home-setup-notice" type="button" onClick={() => setView("settings")}>
+                <span>还没有可浏览的媒体</span>
+                <strong>前往设置，选择相册目录并建立索引 →</strong>
+              </button>
+            ) : index.needsMetadataRefresh ? (
+              <button className="home-setup-notice" type="button" onClick={() => setView("settings")}>
+                <span>索引规则已经更新</span>
+                <strong>前往设置刷新媒体索引 →</strong>
+              </button>
+            ) : null}
 
-              {scanProgress && (
-                <div className={`scan-progress ${scanProgress.status}`}>
-                  <span className="scan-pulse" />
-                  <div>
-                    <strong>
-                      {scanProgress.status === "scanning"
-                        ? `正在建立索引 · ${number.format(scanProgress.discovered)}`
-                        : scanProgress.status === "completed"
-                          ? "扫描完成"
-                          : "扫描已停止"}
-                    </strong>
-                    <small>
-                      新增 {number.format(scanProgress.inserted)} · 更新{" "}
-                      {number.format(scanProgress.updated)} · 未变化{" "}
-                      {number.format(scanProgress.unchanged)} · 错误{" "}
-                      {number.format(scanProgress.errors)}
-                    </small>
-                  </div>
-                </div>
-              )}
-            </section>
-          )}
+            {error && <button className="home-error" type="button" onClick={() => setError("")}>{error}<span>×</span></button>}
 
-          {library && index?.total ? (
-            <section className="explore-card" aria-label="浏览相册">
-              <div className="explore-heading">
-                <span className="section-label">开始浏览</span>
-                <h3>从时间或地点，重新走进记忆</h3>
-              </div>
-              <div className="explore-actions">
+            <section className="home-entry-grid" aria-label="浏览记忆">
                 <button
                   type="button"
-                  disabled={index.needsMetadataRefresh}
+                  disabled={!index?.total || index.needsMetadataRefresh}
                   onClick={() => {
                     setError("");
                     setView("timeline");
                   }}
                 >
-                  <span className="explore-icon">◷</span>
-                  <div>
+                  <span className="home-entry-icon">◷</span>
+                  <div className="home-entry-copy">
+                    <small>CHRONOLOGY</small>
                     <strong>沿时间线浏览</strong>
-                    <small>{number.format(index.total)} 个媒体 · 按年月组织</small>
+                    <p>{number.format(index?.total ?? 0)} 个媒体，按年月组织</p>
                   </div>
-                  <span className="explore-arrow">→</span>
+                  <span className="home-entry-arrow">→</span>
                 </button>
                 <button
                   type="button"
-                  disabled={!index.withLocation || index.needsMetadataRefresh}
+                  disabled={!index?.withLocation || index.needsMetadataRefresh}
                   onClick={() => {
                     setError("");
                     setView("map");
                   }}
                 >
-                  <span className="explore-icon">⌖</span>
-                  <div>
+                  <span className="home-entry-icon">⌖</span>
+                  <div className="home-entry-copy">
+                    <small>PLACES</small>
                     <strong>在地图上查看</strong>
-                    <small>{number.format(index.withLocation)} 个坐标 · 按地点聚合</small>
+                    <p>{number.format(index?.withLocation ?? 0)} 个坐标，按地点聚合</p>
                   </div>
-                  <span className="explore-arrow">→</span>
+                  <span className="home-entry-arrow">→</span>
                 </button>
-              </div>
+                <button
+                  type="button"
+                  disabled={!journal?.total}
+                  onClick={() => {
+                    setError("");
+                    setView("journal");
+                  }}
+                >
+                  <span className="home-entry-icon">☷</span>
+                  <div className="home-entry-copy">
+                    <small>JOURNAL</small>
+                    <strong>阅读 Obsidian 日记</strong>
+                    <p>{number.format(journal?.total ?? 0)} 篇日记，联动当天照片</p>
+                  </div>
+                  <span className="home-entry-arrow">→</span>
+                </button>
             </section>
-          ) : null}
-          </section>
+
+            <footer className="home-footer-note">
+              <span>本地运行</span><i /> <span>媒体只读</span><i /> <span>不上传个人数据</span>
+            </footer>
+            </section>
         ) : view === "timeline" && index ? (
           <TimelineView totalMedia={index.total} onError={setError} />
         ) : view === "map" && index ? (
           <MapView totalLocated={index.withLocation} onError={setError} />
+        ) : view === "journal" && journal ? (
+          <JournalView summary={journal} onError={setError} />
+        ) : view === "settings" ? (
+          <SettingsView
+            library={library}
+            libraries={libraries}
+            index={index}
+            journal={journal}
+            scanning={scanning}
+            journalScanning={journalScanning}
+            onChooseLibrary={chooseLibrary}
+            onActivateLibrary={activateLibrary}
+            onRemoveLibrary={removeLibrary}
+            onScanLibrary={startScan}
+            onChooseJournal={chooseJournal}
+            onScanJournal={scanJournal}
+            onError={setError}
+          />
         ) : null}
       </main>
     </div>
