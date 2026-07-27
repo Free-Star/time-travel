@@ -4,6 +4,7 @@ mod library;
 mod metadata;
 mod safety;
 mod scanner;
+mod storage;
 mod thumbnails;
 #[cfg(target_os = "windows")]
 mod windows_thumbnail;
@@ -424,12 +425,17 @@ fn timeline_neighbor(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Ok(data_directory) = storage::data_dir() {
+        let _ = std::fs::create_dir_all(&data_directory);
+        std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", data_directory.join("webview"));
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .manage(ScanControl::default())
         .manage(ThumbnailControl::default())
         .setup(|app| {
+            storage::migrate_legacy_layout(app.handle())?;
             let settings = library::load_saved_settings(app.handle())?;
             app.state::<AppState>().replace_settings(settings)?;
             Ok(())

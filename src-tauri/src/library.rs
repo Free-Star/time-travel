@@ -5,7 +5,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::safety;
 
@@ -33,7 +33,10 @@ pub struct AppState {
 
 impl AppState {
     pub fn replace_settings(&self, settings: SavedSettings) -> Result<(), String> {
-        *self.settings.lock().map_err(|_| "相册状态锁已损坏".to_string())? = settings;
+        *self
+            .settings
+            .lock()
+            .map_err(|_| "相册状态锁已损坏".to_string())? = settings;
         Ok(())
     }
 
@@ -70,7 +73,11 @@ pub fn configure(
     let canonical_root = validate_library_root(Path::new(&root))?;
     let root_text = canonical_root.to_string_lossy().to_string();
     let mut settings = state.settings()?;
-    if !settings.library_roots.iter().any(|item| same_path(item, &root_text)) {
+    if !settings
+        .library_roots
+        .iter()
+        .any(|item| same_path(item, &root_text))
+    {
         settings.library_roots.push(root_text.clone());
     }
     settings.active_library_root = Some(root_text);
@@ -87,7 +94,11 @@ pub fn activate(
 ) -> Result<LibrarySummary, String> {
     let canonical_root = validate_library_root(Path::new(&root))?;
     let mut settings = state.settings()?;
-    if !settings.library_roots.iter().any(|item| same_path(item, &root)) {
+    if !settings
+        .library_roots
+        .iter()
+        .any(|item| same_path(item, &root))
+    {
         return Err("该目录尚未加入相册库".to_string());
     }
     settings.active_library_root = Some(canonical_root.to_string_lossy().to_string());
@@ -102,8 +113,14 @@ pub fn remove(
     root: String,
 ) -> Result<Option<LibrarySummary>, String> {
     let mut settings = state.settings()?;
-    settings.library_roots.retain(|item| !same_path(item, &root));
-    if settings.active_library_root.as_deref().is_some_and(|item| same_path(item, &root)) {
+    settings
+        .library_roots
+        .retain(|item| !same_path(item, &root));
+    if settings
+        .active_library_root
+        .as_deref()
+        .is_some_and(|item| same_path(item, &root))
+    {
         settings.active_library_root = settings.library_roots.first().cloned();
     }
     let guard = settings
@@ -121,10 +138,7 @@ pub fn remove(
 }
 
 pub fn current(state: &State<'_, AppState>) -> Result<Option<LibrarySummary>, String> {
-    state
-        .root()?
-        .map(|root| summarize(&root, true))
-        .transpose()
+    state.root()?.map(|root| summarize(&root, true)).transpose()
 }
 
 pub fn all(state: &State<'_, AppState>) -> Result<Vec<LibrarySummary>, String> {
@@ -133,7 +147,10 @@ pub fn all(state: &State<'_, AppState>) -> Result<Vec<LibrarySummary>, String> {
         .library_roots
         .iter()
         .map(|root| {
-            let active = settings.active_library_root.as_deref().is_some_and(|value| same_path(value, root));
+            let active = settings
+                .active_library_root
+                .as_deref()
+                .is_some_and(|value| same_path(value, root));
             summarize(Path::new(root), active)
         })
         .collect()
@@ -178,7 +195,8 @@ fn summarize(root: &Path, active: bool) -> Result<LibrarySummary, String> {
     let mut top_level_folders = 0;
     let mut top_level_media = 0;
     if online {
-        for entry in fs::read_dir(root).map_err(|error| format!("无法读取相册目录：{error}"))? {
+        for entry in fs::read_dir(root).map_err(|error| format!("无法读取相册目录：{error}"))?
+        {
             let Ok(entry) = entry else { continue };
             let canonical = match safety::canonical_existing(&entry.path()) {
                 Ok(path) => path,
@@ -187,34 +205,55 @@ fn summarize(root: &Path, active: bool) -> Result<LibrarySummary, String> {
             if safety::is_same_or_descendant(&canonical, &workspace) {
                 continue;
             }
-            if canonical.is_dir() { top_level_folders += 1; }
-            else if is_supported_media(&canonical) { top_level_media += 1; }
+            if canonical.is_dir() {
+                top_level_folders += 1;
+            } else if is_supported_media(&canonical) {
+                top_level_media += 1;
+            }
         }
     }
-    let display_name = root.file_name().and_then(|name| name.to_str()).unwrap_or("相册").to_string();
+    let display_name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("相册")
+        .to_string();
     Ok(LibrarySummary {
-        root: root.to_string_lossy().to_string(), display_name, top_level_folders,
-        top_level_media, project_directory_excluded: safety::is_same_or_descendant(&workspace, root),
-        write_policy: "媒体目录绝对只读", online, active,
+        root: root.to_string_lossy().to_string(),
+        display_name,
+        top_level_folders,
+        top_level_media,
+        project_directory_excluded: safety::is_same_or_descendant(&workspace, root),
+        write_policy: "媒体目录绝对只读",
+        online,
+        active,
     })
 }
 
 fn same_path(left: &str, right: &str) -> bool {
-    left.trim_end_matches(['\\', '/']).eq_ignore_ascii_case(right.trim_end_matches(['\\', '/']))
+    left.trim_end_matches(['\\', '/'])
+        .eq_ignore_ascii_case(right.trim_end_matches(['\\', '/']))
 }
 
 fn is_supported_media(path: &Path) -> bool {
-    path.extension().and_then(|value| value.to_str()).is_some_and(|extension| {
-        MEDIA_EXTENSIONS.iter().any(|supported| extension.eq_ignore_ascii_case(supported))
-    })
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| {
+            MEDIA_EXTENSIONS
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported))
+        })
 }
 
-fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path().app_config_dir().map(|directory| directory.join(SETTINGS_FILE))
-        .map_err(|error| format!("无法确定应用配置目录：{error}"))
+fn settings_path(_app: &AppHandle) -> Result<PathBuf, String> {
+    crate::storage::file(SETTINGS_FILE)
 }
 
-fn save_settings(app: &AppHandle, settings: &SavedSettings, guard_root: &Path) -> Result<(), String> {
-    let bytes = serde_json::to_vec_pretty(settings).map_err(|error| format!("无法生成应用设置：{error}"))?;
+fn save_settings(
+    app: &AppHandle,
+    settings: &SavedSettings,
+    guard_root: &Path,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(settings)
+        .map_err(|error| format!("无法生成应用设置：{error}"))?;
     safety::write_bytes_outside_library(&settings_path(app)?, &bytes, guard_root)
 }

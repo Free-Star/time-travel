@@ -61,7 +61,7 @@ TimeTravel 的首要原则是不修改媒体原件。
     └── 系统预览 / 内嵌预览 / 解码生成缩略图
             │
             ▼
-      应用数据与缓存目录
+      安装目录 / data
             │
             ▼
     React 时间线与离线地图
@@ -155,7 +155,19 @@ E:\TimeAlbumBuild\time-album\release\bundle\nsis\
 4. 对每个新目录执行一次扫描；以后使用增量扫描即可。
 5. Obsidian 日记为可选功能，可在设置中选择 Daily Notes 目录。
 
-应用的数据库、配置和缩略图缓存保存在 Windows 应用数据目录，不会写入相册或 Obsidian Vault。移动硬盘或网络目录暂时不可用时，相册会显示为离线；恢复连接后可直接切换回来，原索引不会被删除。
+应用程序、数据库、配置和缩略图缓存统一位于用户选择的 TimeTravel 安装目录。工作文件集中保存在其中的 `data` 子目录，不会写入相册或 Obsidian Vault。移动硬盘或网络目录暂时不可用时，相册会显示为离线；恢复连接后可直接切换回来，原索引不会被删除。普通卸载会一并清理 `data`，版本升级则会保留它。
+
+```text
+TimeTravel 安装目录/
+├── timetravel.exe
+├── uninst.exe
+└── data/
+    ├── settings.json
+    ├── journal-settings.json
+    ├── time-album.sqlite3
+    ├── thumbnails/
+    └── webview/
+```
 
 ### 5. 发布前校验
 

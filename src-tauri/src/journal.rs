@@ -65,10 +65,8 @@ pub struct JournalEntry {
 }
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_config_dir()
-        .map(|directory| directory.join(SETTINGS_FILE))
-        .map_err(|error| format!("无法确定日记配置目录：{error}"))
+    let _ = app;
+    crate::storage::file(SETTINGS_FILE)
 }
 
 fn find_vault_root(journal_root: &Path) -> Result<PathBuf, String> {

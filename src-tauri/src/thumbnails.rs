@@ -15,7 +15,7 @@ use std::{
 use chrono::Local;
 use image::{codecs::jpeg::JpegEncoder, ImageReader};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use crate::{
     database::{self, ThumbnailPreview, ThumbnailStatus},
@@ -443,10 +443,8 @@ fn report_from_connection(
 }
 
 fn cache_dir(app: &AppHandle, root: &Path) -> Result<PathBuf, String> {
-    let base = app
-        .path()
-        .app_cache_dir()
-        .map_err(|error| format!("无法确定应用缓存目录：{error}"))?;
+    let _ = app;
+    let base = crate::storage::data_dir()?;
     let mut hasher = DefaultHasher::new();
     root.to_string_lossy().to_lowercase().hash(&mut hasher);
     Ok(base

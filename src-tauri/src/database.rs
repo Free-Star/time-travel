@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::safety;
 
@@ -1018,11 +1018,8 @@ fn validate_map_bounds(west: f64, east: f64, south: f64, north: f64) -> Result<(
     Ok(())
 }
 
-pub fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|directory| directory.join(DATABASE_FILE))
-        .map_err(|error| format!("无法确定应用数据目录：{error}"))
+pub fn database_path(_app: &AppHandle) -> Result<PathBuf, String> {
+    crate::storage::file(DATABASE_FILE)
 }
 
 pub fn begin_scan(connection: &Connection, root: &Path, started_at: &str) -> Result<i64, String> {
