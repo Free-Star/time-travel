@@ -13,10 +13,16 @@ pub fn canonical_existing(path: &Path) -> Result<PathBuf, String> {
 
 pub fn workspace_dir() -> Result<PathBuf, String> {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace = manifest
+    if let Some(workspace) = manifest.parent().filter(|path| path.exists()) {
+        return canonical_existing(workspace);
+    }
+
+    let executable =
+        std::env::current_exe().map_err(|error| format!("无法确定应用安装位置：{error}"))?;
+    let install_directory = executable
         .parent()
-        .ok_or_else(|| "无法确定开发工具目录".to_string())?;
-    canonical_existing(workspace)
+        .ok_or_else(|| "无法确定应用安装目录".to_string())?;
+    canonical_existing(install_directory)
 }
 
 /// Return true when `candidate` is `root` itself or one of its descendants.

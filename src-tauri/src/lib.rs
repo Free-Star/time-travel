@@ -1,8 +1,10 @@
 mod database;
+mod journal;
 mod library;
 mod metadata;
 mod safety;
 mod scanner;
+mod storage;
 mod thumbnails;
 #[cfg(target_os = "windows")]
 mod windows_thumbnail;
@@ -25,6 +27,29 @@ fn configure_library(
 #[tauri::command]
 fn current_library(state: State<'_, AppState>) -> Result<Option<LibrarySummary>, String> {
     library::current(&state)
+}
+
+#[tauri::command]
+fn library_roots(state: State<'_, AppState>) -> Result<Vec<LibrarySummary>, String> {
+    library::all(&state)
+}
+
+#[tauri::command]
+fn activate_library(
+    root: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<LibrarySummary, String> {
+    library::activate(&app, &state, root)
+}
+
+#[tauri::command]
+fn remove_library(
+    root: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<LibrarySummary>, String> {
+    library::remove(&app, &state, root)
 }
 
 #[tauri::command]
@@ -57,6 +82,95 @@ async fn scan_library(
 #[tauri::command]
 fn cancel_scan(scan_control: State<'_, ScanControl>) -> bool {
     scan_control.cancel()
+}
+
+#[tauri::command]
+fn configure_journal(
+    root: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<journal::JournalSummary, String> {
+    let media_root = state
+        .root()?
+        .ok_or_else(|| "请先选择相册目录".to_string())?;
+    journal::configure(&app, &media_root, &root)
+}
+
+#[tauri::command]
+fn current_journal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<journal::JournalSummary>, String> {
+    let Some(media_root) = state.root()? else {
+        return Ok(None);
+    };
+    journal::current(&app, &media_root)
+}
+
+#[tauri::command]
+async fn scan_journal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<journal::JournalScanReport, String> {
+    let media_root = state
+        .root()?
+        .ok_or_else(|| "请先选择相册目录".to_string())?;
+    tauri::async_runtime::spawn_blocking(move || journal::scan(&app, &media_root))
+        .await
+        .map_err(|error| format!("日记扫描任务异常退出：{error}"))?
+}
+
+#[tauri::command]
+fn journal_months(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<journal::JournalMonth>, String> {
+    let root = state
+        .root()?
+        .ok_or_else(|| "请先选择相册目录".to_string())?;
+    journal::months(&app, &root)
+}
+
+#[tauri::command]
+fn journal_entries(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    month: String,
+) -> Result<Vec<journal::JournalEntry>, String> {
+    let root = state
+        .root()?
+        .ok_or_else(|| "请先选择相册目录".to_string())?;
+    journal::entries(&app, &root, &month)
+}
+
+#[tauri::command]
+fn journal_entries_for_date(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    date: String,
+) -> Result<Vec<journal::JournalEntry>, String> {
+    let root = state
+        .root()?
+        .ok_or_else(|| "请先选择相册目录".to_string())?;
+    journal::entries_for_date(&app, &root, &date)
+}
+
+#[tauri::command]
+fn journal_media_for_date(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    date: String,
+) -> Result<Vec<database::TimelineItem>, String> {
+    let root = state
+        .root()?
+        .ok_or_else(|| "请先选择相册目录".to_string())?;
+    let connection = database::open(&app, &root)?;
+    database::media_for_date(&connection, &root, &date, 100)
+}
+
+#[tauri::command]
+fn open_journal_in_obsidian(app: AppHandle, path: String) -> Result<(), String> {
+    journal::open_in_obsidian(&app, &path)
 }
 
 #[tauri::command]
@@ -311,24 +425,38 @@ fn timeline_neighbor(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Ok(data_directory) = storage::data_dir() {
+        let _ = std::fs::create_dir_all(&data_directory);
+        std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", data_directory.join("webview"));
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .manage(ScanControl::default())
         .manage(ThumbnailControl::default())
         .setup(|app| {
-            if let Ok(Some(root)) = library::load_saved_root(app.handle()) {
-                let state = app.state::<AppState>();
-                state.set_root(root)?;
-            }
+            storage::migrate_legacy_layout(app.handle())?;
+            let settings = library::load_saved_settings(app.handle())?;
+            app.state::<AppState>().replace_settings(settings)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             configure_library,
             current_library,
+            library_roots,
+            activate_library,
+            remove_library,
             current_index,
             scan_library,
             cancel_scan,
+            configure_journal,
+            current_journal,
+            scan_journal,
+            journal_months,
+            journal_entries,
+            journal_entries_for_date,
+            journal_media_for_date,
+            open_journal_in_obsidian,
             thumbnail_status,
             thumbnail_previews,
             generate_thumbnails,

@@ -11,6 +11,14 @@ type MediaViewerProps = {
   onError: (message: string) => void;
 };
 
+type JournalEntryPreview = {
+  id: number;
+  entryDate: string;
+  title: string;
+  content: string;
+  path: string;
+};
+
 const fullDateFormatter = new Intl.DateTimeFormat("zh-CN", {
   year: "numeric",
   month: "long",
@@ -44,9 +52,14 @@ export default function MediaViewer({
 }: MediaViewerProps) {
   const [loading, setLoading] = useState(false);
   const [viewerError, setViewerError] = useState("");
+  const [journalEntries, setJournalEntries] = useState<JournalEntryPreview[]>([]);
 
   useEffect(() => {
     setViewerError("");
+    const date = item.capturedAt.slice(0, 10);
+    invoke<JournalEntryPreview[]>("journal_entries_for_date", { date })
+      .then(setJournalEntries)
+      .catch(() => setJournalEntries([]));
   }, [item.id]);
 
   useEffect(() => {
@@ -159,6 +172,21 @@ export default function MediaViewer({
             </dd>
           </div>
         </dl>
+        {journalEntries.length > 0 && (
+          <section className="viewer-journal">
+            <span className="section-label">当日日记</span>
+            {journalEntries.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                onClick={() => invoke("open_journal_in_obsidian", { path: entry.path }).catch((reason) => onError(String(reason)))}
+              >
+                <strong>{entry.title}</strong>
+                <small>{entry.content.replace(/[#>*_`\[\]]/g, "").trim().slice(0, 80)}</small>
+              </button>
+            ))}
+          </section>
+        )}
         <p className="viewer-readonly">只读打开 · 不修改原始媒体</p>
       </aside>
 

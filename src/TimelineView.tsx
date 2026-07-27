@@ -210,7 +210,9 @@ export default function TimelineView({ totalMedia, onError }: TimelineViewProps)
     () =>
       prioritizedItems
         .filter((item) => !item.thumbnailPath && item.thumbnailStatus !== "failed")
-        .slice(0, 36)
+        // Visible cards come first; the remainder warms the neighboring window
+        // while the user is reading the current screen.
+        .slice(0, 72)
         .map((item) => item.id),
     [prioritizedItems],
   );
@@ -249,7 +251,7 @@ export default function TimelineView({ totalMedia, onError }: TimelineViewProps)
           automaticJob.current = false;
           setGenerating(false);
         });
-    }, 120);
+    }, 160);
     return () => window.clearTimeout(timer);
   }, [automaticKey, automaticIds, onError, queueTick]);
 

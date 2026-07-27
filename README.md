@@ -5,7 +5,7 @@
   <p><strong>本地优先 · 媒体只读 · 离线地图</strong></p>
 </div>
 
-> 当前版本：`0.0.1-beta`。目前主要面向 Windows 10/11。
+> 当前版本：`0.0.2-beta`。目前主要面向 Windows 10/11。
 
 ## 功能
 
@@ -15,10 +15,16 @@
 - 地图缩放以鼠标位置为中心，底部时间轴支持滚轮切换月份。
 - 地图聚合点可切换“照片数量”或“缩略图”显示。
 - 递归扫描相册，不要求固定的文件夹结构。
+- 支持多个相册根目录，可在设置中切换；移动硬盘或 NAS 离线时保留已有索引。
 - 根据 EXIF、媒体元数据、文件名和目录推断拍摄时间。
 - 增量索引，只重新处理发生变化的文件。
-- 按可见区域实时生成缩略图，优先复用内嵌预览和 Windows Shell 缓存。
+- 采用 320px 轻量缩略图，当前屏幕优先生成并在后台预热邻近内容。
+- 优先复用内嵌预览和 Windows Shell 缓存，打开查看器时仍读取原始清晰度媒体。
 - 照片与视频只读查看、前后导航和媒体详情。
+- 只读索引 Obsidian Daily Notes，在独立日记界面联动当天照片与附件。
+- 从照片查看器发现当日日记，并可跳回 Obsidian 打开原始笔记。
+- 统一设置页面管理相册、日记、增量索引、地图标记和缩略图缓存。
+- 发布版不依赖开发机路径，可在其他 Windows 电脑选择任意可读相册目录。
 
 ## 媒体安全
 
@@ -55,7 +61,7 @@ TimeTravel 的首要原则是不修改媒体原件。
     └── 系统预览 / 内嵌预览 / 解码生成缩略图
             │
             ▼
-      应用数据与缓存目录
+      安装目录 / data
             │
             ▼
     React 时间线与离线地图
@@ -95,7 +101,39 @@ corepack pnpm test:rust
 
 当前测试包含扫描只读安全、缩略图源文件保护、时间线查询、地图聚合和日期识别。
 
-## 打包
+## 打包与部署
+
+### 1. 准备打包环境
+
+首次打包前确认已经安装：
+
+- Node.js LTS，并可运行 `corepack`。
+- Rust stable，推荐通过 rustup 安装 MSVC 工具链。
+- Visual Studio Build Tools，勾选“使用 C++ 的桌面开发”和 Windows SDK。
+- Microsoft Edge WebView2 Runtime。
+
+在 PowerShell 中检查主要工具：
+
+```powershell
+node --version
+corepack --version
+rustc --version
+cargo --version
+```
+
+项目使用 Corepack 调用 pnpm，不需要单独全局安装 `pnpm`。
+
+### 2. 安装依赖并验证
+
+```powershell
+corepack pnpm install
+corepack pnpm build
+corepack pnpm test:rust
+```
+
+如果项目位于中文路径或同步盘中，Rust 的大量中间文件可能被同步软件占用。`package.cmd` 已将 Cargo 构建目录放到 `E:\TimeAlbumBuild\time-album`，以降低路径长度和文件锁问题。
+
+### 3. 生成 Windows 安装包
 
 ```powershell
 .\package.cmd
@@ -107,7 +145,39 @@ corepack pnpm test:rust
 E:\TimeAlbumBuild\time-album\release\bundle\nsis\
 ```
 
-项目将 Rust 构建缓存放在较短的独立路径，以规避 Windows 中文深路径和大型构建文件可能引发的问题。源码仍保留在项目目录。
+其中 `TimeTravel_<版本>_x64-setup.exe` 是可以发送给其他 Windows 用户的 NSIS 安装程序。源码和原始媒体不会被打入安装包。
+
+### 4. 分发与安装
+
+1. 将生成的 `TimeTravel_<版本>_x64-setup.exe` 发给用户。
+2. 用户运行安装程序并按向导完成安装。
+3. 首次启动后进入“设置”，添加一个或多个相册目录。
+4. 对每个新目录执行一次扫描；以后使用增量扫描即可。
+5. Obsidian 日记为可选功能，可在设置中选择 Daily Notes 目录。
+
+应用程序、数据库、配置和缩略图缓存统一位于用户选择的 TimeTravel 安装目录。工作文件集中保存在其中的 `data` 子目录，不会写入相册或 Obsidian Vault。移动硬盘或网络目录暂时不可用时，相册会显示为离线；恢复连接后可直接切换回来，原索引不会被删除。普通卸载会一并清理 `data`，版本升级则会保留它。
+
+```text
+TimeTravel 安装目录/
+├── timetravel.exe
+├── uninst.exe
+└── data/
+    ├── settings.json
+    ├── journal-settings.json
+    ├── time-album.sqlite3
+    ├── thumbnails/
+    └── webview/
+```
+
+### 5. 发布前校验
+
+建议计算安装包哈希，便于接收者验证文件完整性：
+
+```powershell
+Get-FileHash -Algorithm SHA256 "E:\TimeAlbumBuild\time-album\release\bundle\nsis\TimeTravel_0.0.2-beta_x64-setup.exe"
+```
+
+当前安装包尚未加入商业代码签名，因此 Windows SmartScreen 可能显示未知发布者。正式公开发布前建议购买代码签名证书，并进一步接入自动更新。
 
 ## 目录
 
@@ -124,7 +194,7 @@ docs/                   开发计划
 
 - 待完善媒体页面：缺少时间、定位和读取失败。
 - 用户时间与地点修正，只写入数据库。
-- 多级缩略图和缓存容量管理。
+- 缩略图缓存容量上限与自动清理策略。
 - 数据库备份、恢复和版本迁移。
 - 年份快速跳转、地点搜索和快捷键。
 - 代码签名、自动更新和便携版。
